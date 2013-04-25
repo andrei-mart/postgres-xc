@@ -60,6 +60,9 @@ pg_malloc(size_t size)
 {
 	void	   *tmp;
 
+	/* Avoid unportable behavior of malloc(0) */
+	if (size == 0)
+		size = 1;
 	tmp = malloc(size);
 	if (!tmp)
 	{
@@ -462,7 +465,7 @@ AcceptResult(const PGresult *result)
 
 			default:
 				OK = false;
-				psql_error("unexpected PQresultStatus (%d)",
+				psql_error("unexpected PQresultStatus: %d\n",
 						   PQresultStatus(result));
 				break;
 		}
@@ -686,7 +689,7 @@ ProcessResult(PGresult **results)
 			default:
 				/* AcceptResult() should have caught anything else. */
 				is_copy = false;
-				psql_error("unexpected PQresultStatus (%d)", result_status);
+				psql_error("unexpected PQresultStatus: %d\n", result_status);
 				break;
 		}
 
@@ -816,7 +819,7 @@ PrintQueryResults(PGresult *results)
 
 		default:
 			success = false;
-			psql_error("unexpected PQresultStatus (%d)",
+			psql_error("unexpected PQresultStatus: %d\n",
 					   PQresultStatus(results));
 			break;
 	}
@@ -1614,11 +1617,11 @@ session_username(void)
  * substitute '~' with HOME or '~username' with username's home dir
  *
  */
-char *
+void
 expand_tilde(char **filename)
 {
 	if (!filename || !(*filename))
-		return NULL;
+		return;
 
 	/*
 	 * WIN32 doesn't use tilde expansion for file names. Also, it uses tilde
@@ -1666,5 +1669,5 @@ expand_tilde(char **filename)
 	}
 #endif
 
-	return *filename;
+	return;
 }

@@ -118,7 +118,7 @@ explain verbose select * from xc_sort1_hash where val = 5 order by val2;
 -------------------------------------------------------------------------------------
  Data Node Scan on "__REMOTE_SORT_QUERY__"  (cost=0.00..0.00 rows=1000 width=8)
    Output: xc_sort1_hash.val, xc_sort1_hash.val2
-   Node/s: datanode_2
+   Node/s: dn1
    Remote query: SELECT val, val2 FROM ONLY xc_sort1_hash WHERE (val = 5) ORDER BY 2
 (4 rows)
 
@@ -343,23 +343,15 @@ select * from xc_sort1_rep join xc_sort2_hash using (val2) order by xc_sort1_rep
 (11 rows)
 
 explain (costs off, verbose on, nodes off) select * from xc_sort1_rep join xc_sort2_hash using (val2) order by xc_sort1_rep.val, xc_sort2_hash.val, xc_sort2_hash.val2; 
-                                                           QUERY PLAN                                                            
----------------------------------------------------------------------------------------------------------------------------------
+                                                                                                                                                  QUERY PLAN                                                                                                                                                   
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Sort
    Output: xc_sort1_rep.val2, xc_sort1_rep.val, xc_sort2_hash.val, xc_sort1_rep.val, xc_sort2_hash.val, xc_sort2_hash.val2
    Sort Key: xc_sort1_rep.val, xc_sort2_hash.val, xc_sort1_rep.val2
-   ->  Hash Join
+   ->  Data Node Scan on "__REMOTE_SORT_QUERY__"
          Output: xc_sort1_rep.val2, xc_sort1_rep.val, xc_sort2_hash.val, xc_sort1_rep.val, xc_sort2_hash.val, xc_sort2_hash.val2
-         Hash Cond: (xc_sort1_rep.val2 = xc_sort2_hash.val2)
-         ->  Data Node Scan on xc_sort1_rep "_REMOTE_TABLE_QUERY_"
-               Output: xc_sort1_rep.val2, xc_sort1_rep.val
-               Remote query: SELECT val2, val FROM ONLY xc_sort1_rep WHERE true
-         ->  Hash
-               Output: xc_sort2_hash.val, xc_sort2_hash.val2
-               ->  Data Node Scan on xc_sort2_hash "_REMOTE_TABLE_QUERY_"
-                     Output: xc_sort2_hash.val, xc_sort2_hash.val2
-                     Remote query: SELECT val, val2 FROM ONLY xc_sort2_hash WHERE true
-(14 rows)
+         Remote query: SELECT l.a_1, l.a_2, r.a_1, r.a_2 FROM ((SELECT xc_sort1_rep.val2, xc_sort1_rep.val FROM ONLY xc_sort1_rep WHERE true) l(a_1, a_2) JOIN (SELECT xc_sort2_hash.val, xc_sort2_hash.val2 FROM ONLY xc_sort2_hash WHERE true) r(a_1, a_2) ON (true)) WHERE (l.a_1 = r.a_2) ORDER BY 2, 3, 1
+(6 rows)
 
 -- Test 3 the GUC
 set enable_remotesort to off;
@@ -383,7 +375,7 @@ explain verbose select * from xc_sort1_hash order by val, val2;
    Sort Key: xc_sort1_hash.val, xc_sort1_hash.val2
    ->  Data Node Scan on xc_sort1_hash "_REMOTE_TABLE_QUERY_"  (cost=0.00..0.00 rows=1000 width=8)
          Output: xc_sort1_hash.val, xc_sort1_hash.val2
-         Node/s: datanode_1, datanode_2, datanode_3
+         Node/s: dn1, dn2
          Remote query: SELECT val, val2 FROM ONLY xc_sort1_hash WHERE true
 (7 rows)
 
