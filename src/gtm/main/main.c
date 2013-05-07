@@ -72,6 +72,9 @@ int			tcp_keepalives_count;
 char		*error_reporter;
 char		*status_reader;
 bool		isStartUp;
+GTM_MutexLock   control_lock;
+char		GTMControlFileTmp[GTM_MAX_PATH];
+#define GTM_CONTROL_FILE_TMP		"gtm.control.tmp"
 
 /* If this is GTM or not */
 /*
@@ -182,6 +185,7 @@ BaseInit()
 	CreateDataDirLockFile();
 
 	sprintf(GTMControlFile, "%s/%s", GTMDataDir, GTM_CONTROL_FILE);
+	sprintf(GTMControlFileTmp, "%s/%s", GTMDataDir, GTM_CONTROL_FILE_TMP);
 	if (GTMLogFile == NULL)
 	{
 		GTMLogFile = (char *) malloc(GTM_MAX_PATH);
@@ -206,6 +210,7 @@ BaseInit()
 		fflush(stdout);
 		fflush(stderr);
 	}
+	GTM_MutexLockInit(&control_lock);
 }
 
 static void
@@ -281,6 +286,36 @@ gtm_status()
 	exit(0);
 }
 
+/*
+ * Save control file info
+ */
+void
+SaveControlInfo(void)
+{
+	FILE	   *ctlf;
+
+	GTM_MutexLockAcquire(&control_lock);
+
+	ctlf = fopen(GTMControlFileTmp, "w");
+
+	if (ctlf == NULL)
+	{
+		fprintf(stderr, "Failed to create/open the control file\n");
+		fclose(ctlf);
+		GTM_MutexLockRelease(&control_lock);
+		return;
+	}
+
+	GTM_SaveTxnInfo(ctlf);
+	GTM_SaveSeqInfo(ctlf);
+	fclose(ctlf);
+
+	remove(GTMControlFile);
+	rename(GTMControlFileTmp, GTMControlFile);
+
+	GTM_MutexLockRelease(&control_lock);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -288,7 +323,7 @@ main(int argc, char *argv[])
 	int			status;
 	int			i;
 	GlobalTransactionId next_gxid = InvalidGlobalTransactionId;
-	int			ctlfd;
+	FILE	   *ctlf;
 
 	/*
 	 * Local variable to hold command line options.
@@ -556,7 +591,7 @@ main(int argc, char *argv[])
 		elog(LOG, "Startup connection established with active-GTM.");
 	}
 
-	elog(LOG, "Starting GTM server at (%s:%d) -- control file %s", ListenAddresses, GTMPortNumber, GTMControlFile);
+	elog(DEBUG1, "Starting GTM server at (%s:%d) -- control file %s", ListenAddresses, GTMPortNumber, GTMControlFile);
 
 	/*
 	 * Read the last GXID and start from there
@@ -573,28 +608,33 @@ main(int argc, char *argv[])
 			elog(ERROR, "Failed to restore next/last gxid from the active-GTM.");
 			exit(1);
 		}
-		elog(LOG, "Restoring next/last gxid from the active-GTM succeeded.");
+		elog(DEBUG1, "Restoring next/last gxid from the active-GTM succeeded.");
 
 		if (!gtm_standby_restore_gxid())
 		{
 			elog(ERROR, "Failed to restore all of gxid(s) from the active-GTM.");
 			exit(1);
 		}
-		elog(LOG, "Restoring all of gxid(s) from the active-GTM succeeded.");
+		elog(DEBUG1, "Restoring all of gxid(s) from the active-GTM succeeded.");
 
 		if (!gtm_standby_restore_sequence())
 		{
 			elog(ERROR, "Failed to restore sequences from the active-GTM.");
 			exit(1);
 		}
-		elog(LOG, "Restoring sequences from the active-GTM succeeded.");
+		elog(DEBUG1, "Restoring sequences from the active-GTM succeeded.");
 	}
 	else
 	{
-		ctlfd = open(GTMControlFile, O_RDONLY);
-		GTM_RestoreTxnInfo(ctlfd, next_gxid);
-		GTM_RestoreSeqInfo(ctlfd);
-		close(ctlfd);
+		GTM_MutexLockAcquire(&control_lock);
+
+		ctlf = fopen(GTMControlFile, "r");
+		GTM_RestoreTxnInfo(ctlf, next_gxid);
+		GTM_RestoreSeqInfo(ctlf);
+		if (ctlf)
+			fclose(ctlf);
+
+		GTM_MutexLockRelease(&control_lock);
 	}
 
 	if (Recovery_IsStandby())
@@ -604,7 +644,7 @@ main(int argc, char *argv[])
 			elog(ERROR, "Failed to register myself on the active-GTM as a GTM node.");
 			exit(1);
 		}
-		elog(LOG, "Registering myself to the active-GTM as a GTM node succeeded.");
+		elog(DEBUG1, "Registering myself to the active-GTM as a GTM node succeeded.");
 	}
 
 	/* Recover Data of Registered nodes. */
@@ -615,7 +655,7 @@ main(int argc, char *argv[])
 			elog(ERROR, "Failed to restore node information from the active-GTM.");
 			exit(1);
 		}
-		elog(LOG, "Restoring node information from the active-GTM succeeded.");
+		elog(DEBUG1, "Restoring node information from the active-GTM succeeded.");
 
 		if (!gtm_standby_end_backup())
 		{
@@ -691,7 +731,7 @@ main(int argc, char *argv[])
 			elog(ERROR, "Failed to update the standby-GTM status as \"CONNECTED\".");
 			exit(1);
 		}
-		elog(LOG, "Updating the standby-GTM status as \"CONNECTED\" succeeded.");
+		elog(DEBUG1, "Updating the standby-GTM status as \"CONNECTED\" succeeded.");
 		if (!gtm_standby_finish_startup())
 		{
 			elog(ERROR, "Failed to close the initial connection to the active-GTM.");
@@ -781,8 +821,6 @@ ServerLoop(void)
 
 		if (GTMAbortPending)
 		{
-			int ctlfd;
-
 			/*
 			 * XXX We should do a clean shutdown here. For the time being, just
 			 * write the next GXID to be issued in the control file and exit
@@ -796,16 +834,7 @@ ServerLoop(void)
 			 */
 			GTM_SetShuttingDown();
 
-			ctlfd = open(GTMControlFile, O_WRONLY | O_TRUNC | O_CREAT,
-						 S_IRUSR | S_IWUSR);
-			if (ctlfd == -1)
-			{
-				fprintf(stderr, "Failed to create/open the control file\n");
-				exit(2);
-			}
-
-			GTM_SaveTxnInfo(ctlfd);
-			GTM_SaveSeqInfo(ctlfd);
+			SaveControlInfo();
 
 #if 0
 			/*
@@ -820,8 +849,6 @@ ServerLoop(void)
 				gtm_standby_finishActiveConn();
 			}
 #endif
-
-			close(ctlfd);
 
 			exit(1);
 		}
@@ -2044,7 +2071,7 @@ PromoteToActive(void)
 	 * Update the GTM config file for the next restart..
 	 */
 	conf_file = GetConfigOption("config_file", true);
-	elog(LOG, "Config file is %s...", conf_file);
+	elog(DEBUG1, "Config file is %s...", conf_file);
 	if ((fp = fopen(conf_file, PG_BINARY_A)) == NULL)
 	{
 		ereport(FATAL,

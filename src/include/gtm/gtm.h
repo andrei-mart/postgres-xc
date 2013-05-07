@@ -92,6 +92,8 @@ void GTM_DoForAllOtherThreads(void (* process_routine)(GTM_ThreadInfo *));
 GTM_ThreadInfo *GTM_ThreadCreate(GTM_ConnectionInfo *conninfo,
 				  void *(* startroutine)(void *));
 GTM_ThreadInfo * GTM_GetThreadInfo(GTM_ThreadID thrid);
+extern void SaveControlInfo(void);
+#define CONTROL_INTERVAL		1000
 
 /*
  * pthread keys to get thread specific information
