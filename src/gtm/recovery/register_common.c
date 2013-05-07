@@ -633,6 +633,13 @@ Recovery_RecordRegisterInfo(GTM_PGXCNodeInfo *nodeinfo, bool is_register)
 void
 Recovery_RestoreRegisterInfo(void)
 {
+	/*
+	 * There are various errors if recovery.node with info about GTM StandBy
+	 * is read in after GTM master restart. At the same time the info about
+	 * registered nodes is not practically used. If it is, or will be, so
+	 * someone enables the code below, it should be carefully tested.
+	 */
+#if 0
 	int magic;
 	int ctlfd;
 
@@ -701,6 +708,7 @@ Recovery_RestoreRegisterInfo(void)
 	}
 
 	close(ctlfd);
+#endif
 }
 
 void
