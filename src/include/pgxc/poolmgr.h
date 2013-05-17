@@ -61,7 +61,7 @@ typedef enum
 /* Connection pool entry */
 typedef struct
 {
-	struct timeval released;
+	pg_time_t released;
 	NODE_CONNECTION *conn;
 	NODE_CANCEL	*xc_cancelConn;
 } PGXCNodePoolSlot;
@@ -86,6 +86,7 @@ typedef struct databasepool
 								 * Coordinator or DataNode */
 	MemoryContext mcxt;
 	struct databasepool *next; 	/* Reference to next to organize linked list */
+	pg_time_t  oldest_idle;
 } DatabasePool;
 
 /*
@@ -120,6 +121,8 @@ typedef struct
 } PoolHandle;
 
 extern int	MinPoolSize;
+extern int	PoolConnKeepAlive;
+extern int	PoolMaintenanceTimeout;
 extern int	MaxPoolSize;
 extern int	PoolerPort;
 

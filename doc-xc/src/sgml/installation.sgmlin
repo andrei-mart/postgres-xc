@@ -2337,7 +2337,7 @@ postgres$ <userinput>/usr/local/pgsql/bin/initdb -D /usr/local/pgsql/data</>
        parameter specifies minimum number of connection to pool.
        If you're not configuring <productname>XC</> cluster in
        unballanced way, you should specify the same value to all the
-       Coordinators.
+       Coordinators. This parameter has now been deprecated.
       </par>
      </listitem>
     </varlistentry>
@@ -2355,6 +2355,36 @@ postgres$ <userinput>/usr/local/pgsql/bin/initdb -D /usr/local/pgsql/data</>
        If you're not configuring <productname>XC</> cluster in
        unballanced way, you should specify the same value to all the
        Coordinators.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><envar>pool_maintenance_timeout</envar></term>
+     <listitem>
+&xconly;
+      <para>
+       Launch the maintenance routine after every these many seconds.
+       Idle connections are cleaned up in this maintenance activity if
+       the <option>pool_conn_keepalive</> parameter is set.
+       Setting <option>pool_maintenance_timeout</> parameter to -1
+       disables this maintenance feature.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><envar>pool_conn_keepalive</envar></term>
+     <listitem>
+&xconly;
+      <para>
+       This parameter specifies the maximum number of seconds that a
+       connection in the connection pool is allowed to be idle. The
+       connection gets closed if it has been idle beyond this time period.
+       Setting this parameter to -1 disables this feature. Note that
+       <option>pool_maintenance_timeout</> should be enabled for the
+       maintenance activity to kick in to enable cleanup of idle
+       connections.
       </para>
      </listitem>
     </varlistentry>

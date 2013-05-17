@@ -2517,7 +2517,31 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"max_pool_size", PGC_POSTMASTER, DATA_NODES,
+		{"pool_conn_keepalive", PGC_SIGHUP, DATA_NODES,
+			gettext_noop("Close connections if they are idle in the pool for that time."),
+			gettext_noop("A value of -1 turns autoclose off. The"
+						 " \"pool_maintenance_timeout\" guc should be enabled"
+						 " for this cleanup to take place"),
+			GUC_UNIT_S
+		},
+		&PoolConnKeepAlive,
+		600, -1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"pool_maintenance_timeout", PGC_SIGHUP, DATA_NODES,
+			gettext_noop("Launch maintenance routine after every these many seconds."),
+			gettext_noop("A value of -1 turns feature off."),
+			GUC_UNIT_S
+		},
+		&PoolMaintenanceTimeout,
+		30, -1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_pool_size", PGC_SIGHUP, DATA_NODES,
 			gettext_noop("Max pool size."),
 			gettext_noop("If number of active connections reaches this value, "
 						 "other connection requests will be refused")

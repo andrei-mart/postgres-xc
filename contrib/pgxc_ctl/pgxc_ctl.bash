@@ -37,7 +37,8 @@
 #================================================================
 # MEMO
 #
-# max_connections, min_pool_size, max_pool_size --> should be configurable!
+# max_connections, pool_maintenance_timeout, max_pool_size,
+# pool_conn_keepalive --> should be configurable!
 # They're not cluster specific.  So we may give a chance to include
 # these specific options to be included from external files.
 # They should not change by failover so they just have to be
@@ -274,7 +275,8 @@ function create_config_file_template
 #================================================================
 # MEMO
 #
-# max_connections, min_pool_size, max_pool_size --> should be configurable!
+# max_connections, pool_maintenance_timeout, max_pool_size,
+# pool_conn_keepalive --> should be configurable!
 # They're not cluster specific.  So we may give a chance to include
 # these specific options to be included from external files.
 # They should not change by failover so they just have to be

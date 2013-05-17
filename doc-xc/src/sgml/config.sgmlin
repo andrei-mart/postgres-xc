@@ -6942,6 +6942,38 @@ Postgres-XC Specific Parameters
       <listitem>
        <para>
         Minumum number of the connection from the Coordinator to Datanodes.
+        This parameter has been deprecated.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-pool-maintenance-timeout" xreflabel="pool_maintenance_timeout">
+      <term><varname>pool_maintenance_timeout</varname> (<type>integer</type>)</term>
+      <indexterm>
+       <primary><varname>pool_maintenance_timeout</> configuration parameter</primary>
+      </indexterm>
+      <listitem>
+       <para>
+        Launch the maintenance routine after every these many seconds. Idle connections
+        are cleaned up in this maintenance activity if
+        <varname>pool_conn_keepalive</> has been set.
+        Setting <varname>pool_maintenance_timeout</> parameter to -1 disables
+        this feature.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-pool-conn-keepalive" xreflabel="pool_conn_keepalive">
+      <term><varname>pool_conn_keepalive</varname> (<type>integer</type>)</term>
+      <indexterm>
+       <primary><varname>pool_conn_keepalive</> configuration parameter</primary>
+      </indexterm>
+      <listitem>
+       <para>
+        Close connections in the connection pool if they have been idle for
+        more than these many seconds. Setting this parameter to -1 disables
+        this feature. Note that <varname>pool_maintenance_timeout</> should
+        be enabled for this cleanup to take place.
        </para>
       </listitem>
      </varlistentry>

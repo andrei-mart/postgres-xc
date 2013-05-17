@@ -64,6 +64,8 @@
 
 /* Configuration options */
 int			MinPoolSize = 1;
+int			PoolConnKeepAlive = 600;
+int			PoolMaintenanceTimeout = 30;
 int			MaxPoolSize = 100;
 int			PoolerPort = 6667;
 
@@ -147,10 +149,14 @@ static char *build_node_conn_str(Oid node, DatabasePool *dbPool);
 /* Signal handlers */
 static void pooler_die(SIGNAL_ARGS);
 static void pooler_quickdie(SIGNAL_ARGS);
+static void pooler_sighup(SIGNAL_ARGS);
+static bool shrink_pool(DatabasePool *pool);
+static void pools_maintenance(void);
 
 /*
  * Flags set by interrupt handlers for later service in the main loop.
  */
+static volatile sig_atomic_t got_SIGHUP = false;
 static volatile sig_atomic_t shutdown_requested = false;
 
 void
@@ -208,7 +214,7 @@ PoolManagerInit()
 	pqsignal(SIGINT, pooler_die);
 	pqsignal(SIGTERM, pooler_die);
 	pqsignal(SIGQUIT, pooler_quickdie);
-	pqsignal(SIGHUP, SIG_IGN);
+	pqsignal(SIGHUP, pooler_sighup);
 	/* TODO other signal handlers */
 
 	/* We allow SIGQUIT (quickdie) at all times */
@@ -1788,6 +1794,13 @@ agent_release_connections(PoolAgent *agent, bool force_destroy)
 		agent->coord_connections[i] = NULL;
 	}
 
+	/*
+	 * Released connections appear in the pool and we may want to close
+	 * them eventually.
+	 */
+	if (!force_destroy && agent->pool->oldest_idle == (time_t) 0)
+		agent->pool->oldest_idle = time(NULL);
+
 	MemoryContextSwitchTo(oldcontext);
 }
 
@@ -1886,6 +1899,8 @@ create_database_pool(const char *database, const char *user_name, const char *pg
 	databasePool->user_name = pstrdup(user_name);
 	 /* Copy the pgoptions */
 	databasePool->pgoptions = pstrdup(pgoptions);
+	/* Reset the oldest_idle value */
+	databasePool->oldest_idle = (time_t) 0;
 
 	if (!databasePool->database)
 	{
@@ -2185,6 +2200,7 @@ release_connection(DatabasePool *dbPool, PGXCNodePoolSlot *slot,
 	{
 		/* Insert the slot into the array and increase pool size */
 		nodePool->slot[(nodePool->freeSize)++] = slot;
+		slot->released = time(NULL);
 	}
 	else
 	{
@@ -2206,6 +2222,7 @@ grow_pool(DatabasePool *dbPool, Oid node)
 {
 	PGXCNodePool   *nodePool;
 	bool			found;
+	bool 			tryagain = true; /* retry connecting in case of errors */
 
 	Assert(dbPool);
 
@@ -2233,7 +2250,7 @@ grow_pool(DatabasePool *dbPool, Oid node)
 		nodePool->size = 0;
 	}
 
-	while (nodePool->size < MinPoolSize || (nodePool->freeSize == 0 && nodePool->size < MaxPoolSize))
+	while (nodePool->freeSize == 0 && nodePool->size < MaxPoolSize)
 	{
 		PGXCNodePoolSlot *slot;
 
@@ -2257,10 +2274,27 @@ grow_pool(DatabasePool *dbPool, Oid node)
 			ereport(LOG,
 					(errcode(ERRCODE_CONNECTION_FAILURE),
 					 errmsg("failed to connect to Datanode")));
+			/*
+			 * If we failed to connect, probably number of connections on the
+			 * target node reached max_connections. Try and release idle
+			 * connections and retry.
+			 *
+			 * We do not want to enter an endless loop here and run maintenance
+			 * procedure only once.
+			 */
+			if (tryagain && nodePool->size > nodePool->freeSize)
+			{
+				pools_maintenance();
+				tryagain = false;
+				continue;
+			}
 			break;
 		}
 
 		slot->xc_cancelConn = (NODE_CANCEL *) PQgetCancel((PGconn *)slot->conn);
+		slot->released = time(NULL);
+		if (dbPool->oldest_idle == (time_t) 0)
+			dbPool->oldest_idle = slot->released;
 
 		/* Insert at the end of the pool */
 		nodePool->slot[(nodePool->freeSize)++] = slot;
@@ -2326,7 +2360,8 @@ destroy_node_pool(PGXCNodePool *node_pool)
 static void
 PoolerLoop(void)
 {
-	StringInfoData input_message;
+	StringInfoData 	input_message;
+	pg_time_t       last_maintenance = (pg_time_t) 0;
 
 	server_fd = pool_listen(PoolerPort, UnixSocketDir);
 	if (server_fd == -1)
@@ -2335,6 +2370,7 @@ PoolerLoop(void)
 		return;
 	}
 	initStringInfo(&input_message);
+
 	for (;;)
 	{
 		int			nfds;
@@ -2365,8 +2401,51 @@ PoolerLoop(void)
 			nfds = Max(nfds, sockfd);
 		}
 
-		/* wait for event */
-		retval = select(nfds + 1, &rfds, NULL, NULL, NULL);
+		if (PoolMaintenanceTimeout > 0)
+		{
+			struct timeval	maintenance_timeout;
+			int				timeout_val;
+			double			timediff;
+
+			/*
+			 * Decide the timeout value based on when the last
+			 * maintenance activity was carried out. If the last
+			 * maintenance was done quite a while ago schedule the select
+			 * with no timeout. It will serve any incoming activity
+			 * and if there's none it will cause the maintenance
+			 * to be scheduled as soon as possible
+			 */
+			timediff = difftime(time(NULL), last_maintenance);
+
+			if (timediff > PoolMaintenanceTimeout)
+				timeout_val = 0;
+			else
+				timeout_val = PoolMaintenanceTimeout - rint(timediff);
+
+			maintenance_timeout.tv_sec = timeout_val;
+			maintenance_timeout.tv_usec = 0;
+			/* wait for event */
+			retval = select(nfds + 1, &rfds, NULL, NULL, &maintenance_timeout);
+		}
+		else
+			retval = select(nfds + 1, &rfds, NULL, NULL, NULL);
+
+		/*
+		 * Emergency bailout if postmaster has died.  This is to avoid the
+		 * necessity for manual cleanup of all postmaster children.
+		 */
+		if (!PostmasterIsAlive())
+			exit(1);
+
+		/*
+		 * Process any requests or signals received recently.
+		 */
+		if (got_SIGHUP)
+		{
+			got_SIGHUP = false;
+			ProcessConfigFile(PGC_SIGHUP);
+		}
+
 		if (shutdown_requested)
 		{
 			for (i = agentCount - 1; i >= 0; i--)
@@ -2399,6 +2478,12 @@ PoolerLoop(void)
 			}
 			if (FD_ISSET(server_fd, &rfds))
 				agent_create();
+		}
+		else if (retval == 0)
+		{
+			/* maintenance timeout */
+			pools_maintenance();
+			last_maintenance = time(NULL);
 		}
 	}
 }
@@ -2530,6 +2615,12 @@ pooler_quickdie(SIGNAL_ARGS)
 	exit(2);
 }
 
+static void
+pooler_sighup(SIGNAL_ARGS)
+{
+	got_SIGHUP = true;
+}
+
 bool
 IsPoolHandle(void)
 {
@@ -2565,4 +2656,108 @@ build_node_conn_str(Oid node, DatabasePool *dbPool)
 	pfree(nodeDef);
 
 	return connstr;
+}
+
+/*
+ * Check all pooled connections, and close which have been released more then
+ * PooledConnKeepAlive seconds ago.
+ * Return true if shrink operation closed all the connections, false if there
+ * are still connections either in pool or in use.
+ */
+static bool
+shrink_pool(DatabasePool *pool)
+{
+	time_t 			now = time(NULL);
+	HASH_SEQ_STATUS hseq_status;
+	PGXCNodePool   *nodePool;
+	bool			empty = true;
+
+	/* Negative PooledConnKeepAlive disables automatic connection cleanup */
+	if (PoolConnKeepAlive < 0)
+		return false;
+
+	pool->oldest_idle = (time_t) 0;
+	hash_seq_init(&hseq_status, pool->nodePools);
+	while ((nodePool = (PGXCNodePool *) hash_seq_search(&hseq_status)))
+	{
+		int i;
+		/* Go thru the free slots and destroy those that are free too long */
+		for (i = 0; i < nodePool->freeSize; )
+		{
+			PGXCNodePoolSlot *slot = nodePool->slot[i];
+
+			if (difftime(now, slot->released) > PoolConnKeepAlive)
+			{
+				/* connection is idle for long, close it */
+				destroy_slot(slot);
+				/* reduce pool size and total number of connections */
+				(nodePool->freeSize)--;
+				(nodePool->size)--;
+				/* move last connection in place, if not at last already */
+				if (i < nodePool->freeSize)
+					nodePool->slot[i] = nodePool->slot[nodePool->freeSize];
+			}
+			else
+			{
+				if (pool->oldest_idle == (time_t) 0 ||
+						difftime(pool->oldest_idle, slot->released) > 0)
+					pool->oldest_idle = slot->released;
+
+				i++;
+			}
+		}
+		if (nodePool->size > 0)
+			empty = false;
+		else
+		{
+			destroy_node_pool(nodePool);
+			hash_search(pool->nodePools, &nodePool->nodeoid, HASH_REMOVE, NULL);
+		}
+	}
+
+	return empty;
+}
+
+
+/*
+ * Scan connection pools and release connections which are idle for long.
+ * If pool gets empty after releasing connections it is destroyed.
+ */
+static void
+pools_maintenance(void)
+{
+	DatabasePool   *prev = NULL;
+	DatabasePool   *curr = databasePools;
+	time_t			now = time(NULL);
+	int				count = 0;
+
+	/* Iterate over the pools */
+	while (curr)
+	{
+		/*
+		 * If current pool has connections to close and it is emptied after
+		 * shrink remove the pool and free memory.
+		 * Otherwithe move to next pool.
+		 */
+		if (curr->oldest_idle != (time_t) 0 &&
+				difftime(now, curr->oldest_idle) > PoolConnKeepAlive &&
+				shrink_pool(curr))
+		{
+			MemoryContext mem = curr->mcxt;
+			curr = curr->next;
+			if (prev)
+				prev->next = curr;
+			else
+				databasePools = curr;
+			MemoryContextDelete(mem);
+			count++;
+		}
+		else
+		{
+			prev = curr;
+			curr = curr->next;
+		}
+	}
+	elog(DEBUG1, "Pool maintenance, done in %f seconds, removed %d pools",
+			difftime(time(NULL), now), count);
 }
