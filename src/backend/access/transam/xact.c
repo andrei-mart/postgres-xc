@@ -2506,26 +2506,18 @@ AtEOXact_GlobalTxn(bool commit)
 				RollbackTranGTM(s->topGlobalTransansactionId);
 		}
 	}
-	else if (IS_PGXC_DATANODE || IsConnFromCoord())
+	/*
+	 * If GTM is connected the current gxid is acquired from GTM directly.
+	 * So directly report transaction end.
+	 */
+	else if (IsGTMConnected())
 	{
-		/* If we are autovacuum, commit on GTM */
-		if ((IsAutoVacuumWorkerProcess() || GetForceXidFromGTM())
-				&& IsGTMConnected())
-		{
-			if (commit)
-				CommitTranGTM(s->topGlobalTransansactionId);
-			else
-				RollbackTranGTM(s->topGlobalTransansactionId);
-		}
-		else if (GlobalTransactionIdIsValid(currentGxid))
-		{
-			if (commit)
-				CommitTranGTM(currentGxid);
-			else
-				RollbackTranGTM(currentGxid);
-		}
+		if (commit)
+			CommitTranGTM(s->topGlobalTransansactionId);
+		else
+			RollbackTranGTM(s->topGlobalTransansactionId);
+		CloseGTM();
 	}
-
 	s->topGlobalTransansactionId = InvalidGlobalTransactionId;
 	s->auxilliaryTransactionId = InvalidGlobalTransactionId;
 
