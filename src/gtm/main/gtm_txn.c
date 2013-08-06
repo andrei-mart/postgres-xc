@@ -159,7 +159,12 @@ GTM_GXIDToHandle(GlobalTransactionId gxid)
 	if (gtm_txninfo != NULL)
 		return gtm_txninfo->gti_handle;
 	else
+	{
+		ereport(WARNING,
+				(ERANGE, errmsg("No transaction handle for gxid: %d",
+								gxid)));
 		return InvalidTransactionHandle;
+	}
 }
 
 /*
@@ -1479,7 +1484,7 @@ ProcessBeginTransactionGetGXIDCommandMulti(Port *myport, StringInfo message)
 	/* GXID has been received, now it's time to get a GTM timestamp */
 	timestamp = GTM_TimestampGetCurrent();
 
-	end_gxid = start_gxid + txn_count;
+	end_gxid = start_gxid + (txn_count - 1);
 	if (end_gxid < start_gxid)
 		end_gxid += FirstNormalGlobalTransactionId;
 
