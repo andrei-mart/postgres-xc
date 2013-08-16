@@ -159,7 +159,7 @@ GTM_GXIDToHandle(GlobalTransactionId gxid)
 	else
 	{
 		ereport(WARNING,
-				(ERANGE, errmsg("No transaction handle for gxid: %d",
+				(ERANGE, errmsg("No transaction handle for gxid: %u",
 								gxid)));
 		return InvalidTransactionHandle;
 	}
