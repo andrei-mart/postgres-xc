@@ -343,12 +343,16 @@ NOTICE:  trigger_func(insert_when) called: action = INSERT, when = BEFORE, level
 NOTICE:  trigger_func(insert_a) called: action = INSERT, when = AFTER, level = ROW
 NOTICE:  trigger_func(after_ins_stmt) called: action = INSERT, when = AFTER, level = STATEMENT
 COPY main_table FROM stdin;
-NOTICE:  trigger_func(before_ins_stmt) called: action = INSERT, when = BEFORE, level = STATEMENT
-NOTICE:  trigger_func(insert_when) called: action = INSERT, when = BEFORE, level = STATEMENT
-NOTICE:  trigger_func(insert_a) called: action = INSERT, when = AFTER, level = ROW
-NOTICE:  trigger_func(after_ins_stmt) called: action = INSERT, when = AFTER, level = STATEMENT
+ERROR:  Non-shippable ROW triggers not supported with COPY
+123	999
+456	999
+\.
+invalid command \.
+;
+ERROR:  syntax error at or near "123"
+LINE 1: 123 999
+        ^
 DELETE FROM main_table WHERE a IN (123, 456);
-NOTICE:  trigger_func(delete_a) called: action = DELETE, when = AFTER, level = ROW
 NOTICE:  trigger_func(delete_a) called: action = DELETE, when = AFTER, level = ROW
 NOTICE:  trigger_func(delete_when) called: action = DELETE, when = AFTER, level = STATEMENT
 UPDATE main_table SET a = 50, b = 60;

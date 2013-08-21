@@ -119,8 +119,8 @@ typedef struct
 	List			*coord_var_tlist;
 	List			*query_var_tlist;
 	bool			has_row_marks;		/* Did SELECT had FOR UPDATE/SHARE? */
-	bool			has_ins_child_sel_parent;	/* This node is part of an INSERT SELECT that
-								 * inserts into child by selecting from its parent */
+	bool			rq_save_command_id;	/* Save the command ID to be used in
+										 * some special cases */
 } RemoteQuery;
 
 extern PlannedStmt *pgxc_planner(Query *query, int cursorOptions,
@@ -134,6 +134,8 @@ extern void pgxc_rqplan_adjust_tlist(RemoteQuery *rqplan);
 extern Plan *pgxc_make_modifytable(PlannerInfo *root, Plan *topplan);
 extern Var *pgxc_get_dist_var(Index varno, RangeTblEntry *rte, List *tlist);
 extern ExecNodes *pgxc_is_join_shippable(ExecNodes *inner_en, ExecNodes *outer_en,
+											bool inner_unshippable_tlist,
+											bool outer_shippable_tlist,
 											JoinType jointype, Node *join_quals);
 
 #endif   /* PGXCPLANNER_H */

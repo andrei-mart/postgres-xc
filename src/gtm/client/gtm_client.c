@@ -51,7 +51,8 @@ static int abort_transaction_multi_internal(GTM_Conn *conn, int txn_count, Globa
 static int open_sequence_internal(GTM_Conn *conn, GTM_SequenceKey key, GTM_Sequence increment,
 								  GTM_Sequence minval, GTM_Sequence maxval,
 								  GTM_Sequence startval, bool cycle, bool is_backup);
-static GTM_Sequence get_next_internal(GTM_Conn *conn, GTM_SequenceKey key, bool is_backup);
+static int get_next_internal(GTM_Conn *conn, GTM_SequenceKey key,
+									  GTM_Sequence *result, bool is_backup);
 static int set_val_internal(GTM_Conn *conn, GTM_SequenceKey key, GTM_Sequence nextval, bool iscalled, bool is_backup);
 static int reset_sequence_internal(GTM_Conn *conn, GTM_SequenceKey key, bool is_backup);
 static int commit_transaction_internal(GTM_Conn *conn, GlobalTransactionId gxid, bool is_backup);
@@ -63,6 +64,7 @@ static int alter_sequence_internal(GTM_Conn *conn, GTM_SequenceKey key, GTM_Sequ
 static int node_register_worker(GTM_Conn *conn, GTM_PGXCNodeType type, const char *host, GTM_PGXCNodePort port,
 								char *node_name, char *datafolder, GTM_PGXCNodeStatus status, bool is_backup);
 static int node_unregister_worker(GTM_Conn *conn, GTM_PGXCNodeType type, const char * node_name, bool is_backup);
+static int report_barrier_internal(GTM_Conn *conn, char *barrier_id, bool is_backup);
 /*
  * Make an empty result if old one is null.
  */
@@ -1299,20 +1301,21 @@ send_failed:
 	return -1;
 }
 
-GTM_Sequence
-get_next(GTM_Conn *conn, GTM_SequenceKey key)
+int
+get_next(GTM_Conn *conn, GTM_SequenceKey key, GTM_Sequence *result)
 {
-	return get_next_internal(conn, key, false);
+	return get_next_internal(conn, key, result, false);
 }
 
-GTM_Sequence
-bkup_get_next(GTM_Conn *conn, GTM_SequenceKey key)
+int
+bkup_get_next(GTM_Conn *conn, GTM_SequenceKey key, GTM_Sequence *result)
 {
-	return get_next_internal(conn, key, true);
+	return get_next_internal(conn, key, result, true);
 }
 
-static GTM_Sequence
-get_next_internal(GTM_Conn *conn, GTM_SequenceKey key, bool is_backup)
+static int
+get_next_internal(GTM_Conn *conn, GTM_SequenceKey key,
+				  GTM_Sequence *result, bool is_backup)
 {
 	GTM_Result *res = NULL;
 	time_t finish_time;
@@ -1343,9 +1346,8 @@ get_next_internal(GTM_Conn *conn, GTM_SequenceKey key, bool is_backup)
 			goto receive_failed;
 
 		if (res->gr_status == GTM_RESULT_OK)
-			return res->gr_resdata.grd_seq.seqval;
-		else
-			return InvalidSequenceValue;
+			*result = res->gr_resdata.grd_seq.seqval;
+		return res->gr_status;
 	}
 	return GTM_RESULT_OK;
 
@@ -2037,6 +2039,72 @@ send_failed:
 	conn->result->gr_status = GTM_RESULT_COMM_ERROR;
 	return -1;
 }
+
+/*
+ * Barrier
+ */
+
+int
+report_barrier(GTM_Conn *conn, char *barrier_id)
+{
+	return(report_barrier_internal(conn, barrier_id, false));
+}
+
+int
+bkup_report_barrier(GTM_Conn *conn, char *barrier_id)
+{
+	return(report_barrier_internal(conn, barrier_id, true));
+
+}
+
+static int
+report_barrier_internal(GTM_Conn *conn, char *barrier_id, bool is_backup)
+{
+	GTM_Result *res = NULL;
+	time_t finish_time;
+	int barrier_id_len = strlen(barrier_id) + 1;
+	
+
+	/* Send the message */
+	if (gtmpqPutMsgStart('C', true, conn)) /* FIXME: not proxy header --> proxy shold handle this separately */
+		goto send_failed;
+	if (gtmpqPutInt(is_backup ? MSG_BKUP_BARRIER : MSG_BARRIER, sizeof(GTM_MessageType), conn) ||
+		gtmpqPutInt(barrier_id_len, sizeof(int), conn) ||
+		gtmpqPutnchar(barrier_id, barrier_id_len, conn))
+		goto send_failed;
+	/* Flush the message */
+	if (gtmpqPutMsgEnd(conn))
+		goto send_failed;
+	/* Flush to ensure backend gets it */
+	if (gtmpqFlush(conn))
+		goto send_failed;
+
+	/* Handle the response */
+	if (!is_backup)
+	{
+		finish_time = time(NULL) + CLIENT_GTM_TIMEOUT;
+		if (gtmpqWaitTimed(true, false, conn, finish_time) ||
+			gtmpqReadData(conn) < 0)
+			goto receive_failed;
+
+		if ((res = GTMPQgetResult(conn)) == NULL)
+			goto receive_failed;
+
+		return res->gr_status;
+	}
+	return GTM_RESULT_OK;
+
+receive_failed:
+send_failed:
+	conn->result = makeEmptyResultIfIsNull(conn->result);
+	conn->result->gr_status = GTM_RESULT_COMM_ERROR;
+	return -1;
+}
+
+
+/*
+ * Backup to Standby
+ */
 
 int
 set_begin_end_backup(GTM_Conn *conn, bool begin)
