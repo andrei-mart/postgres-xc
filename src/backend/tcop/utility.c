@@ -883,6 +883,15 @@ standard_ProcessUtility(Node *parsetree,
 			switch (((DropStmt *) parsetree)->removeType)
 			{
 				case OBJECT_INDEX:
+#ifdef PGXC
+					if (((DropStmt *) parsetree)->concurrent)
+					{
+						ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("PGXC does not support concurrent INDEX yet"),
+							 errdetail("The feature is not currently supported")));
+					}
+#endif
 					if (((DropStmt *) parsetree)->concurrent)
 						PreventTransactionChain(isTopLevel,
 												"DROP INDEX CONCURRENTLY");
@@ -1678,14 +1687,15 @@ standard_ProcessUtility(Node *parsetree,
 				PreventCommandDuringRecovery((stmt->options & VACOPT_VACUUM) ?
 											 "VACUUM" : "ANALYZE");
 #ifdef PGXC
-                /*
-                 * We have to run the command on nodes before Coordinator because
-                 * vacuum() pops active snapshot and we can not send it to nodes
-                 */
-                if (IS_PGXC_COORDINATOR)
-                    ExecUtilityStmtOnNodes(queryString, NULL, sentToRemote, true, EXEC_ON_DATANODES, false);
+				/*
+				 * We have to run the command on nodes before Coordinator
+				 * because vacuum() pops active snapshot and we can not
+				 * send it to nodes.
+				 */
+				if (IS_PGXC_COORDINATOR)
+					ExecUtilityStmtOnNodes(queryString, NULL, sentToRemote,
+											true, EXEC_ON_DATANODES, false);
 #endif
-
 				vacuum(stmt, InvalidOid, true, NULL, false, isTopLevel);
 			}
 			break;
@@ -2082,6 +2092,12 @@ IsStmtAllowedInLockedMode(Node *parsetree, const char *queryString)
 											 * This has to be allowed so that the new node
 											 * can be created, while the cluster is still
 											 * locked for backup
+											 */
+		case T_DropNodeStmt:				/*
+											 * This has to be allowed so that DROP NODE
+											 * can be issued to drop a node that has crashed.
+											 * Otherwise system would try to acquire a shared
+											 * advisory lock on the crashed node.
 											 */
 		case T_TransactionStmt:
 		case T_PlannedStmt:

@@ -999,6 +999,14 @@ ExecuteTruncate(TruncateStmt *stmt)
 	SubTransactionId mySubid;
 	ListCell   *cell;
 
+#ifdef PGXC
+	if (stmt->restart_seqs)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("PGXC does not support RESTART IDENTITY yet"),
+				 errdetail("The feature is not supported currently")));
+#endif
+
 	/*
 	 * Open, exclusive-lock, and check all the explicitly-specified relations
 	 */
@@ -10600,41 +10608,29 @@ AlterTableNamespaceInternal(Relation rel, Oid oldNspOid, Oid nspOid,
 	heap_close(classRel, RowExclusiveLock);
 
 #ifdef PGXC
-    /* Rename also sequence on GTM for a sequence */
-    if (IS_PGXC_COORDINATOR &&
-        !IsConnFromCoord() &&
-        rel->rd_rel->relkind == RELKIND_SEQUENCE &&
-        /*
-         * Koichi:
-         * The following change was needed with 923 merge.  Now we need to
-         * get relid by calling RelationGetRelid(rel).
-         */
-#if 0
-        !IsTempSequence(relid))
-#else
-        !IsTempSequence(RelationGetRelid(rel)))
+	/* Rename also sequence on GTM for a sequence */
+	if (IS_PGXC_COORDINATOR &&
+		!IsConnFromCoord() &&
+		rel->rd_rel->relkind == RELKIND_SEQUENCE &&
+		!IsTempSequence(RelationGetRelid(rel)))
+	{
+		char *seqname = GetGlobalSeqName(rel, NULL, NULL);
+		char *newseqname = GetGlobalSeqName(rel, NULL,
+											get_namespace_name(nspOid));
+
+		/* We also need to rename it on the GTM */
+		if (RenameSequenceGTM(seqname, newseqname) < 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_CONNECTION_FAILURE),
+					 errmsg("GTM error, could not rename sequence")));
+
+		/* Register a rename callback in case transaction is dropped */
+		register_sequence_rename_cb(seqname, newseqname);
+
+		pfree(seqname);
+		pfree(newseqname);
+	}
 #endif
-    {
-        char *seqname = GetGlobalSeqName(rel, NULL, NULL);
-        char *newseqname = GetGlobalSeqName(rel, NULL,
-                                            get_namespace_name(nspOid));
-
-        /* We also need to rename it on the GTM */
-        if (RenameSequenceGTM(seqname, newseqname) < 0)
-            ereport(ERROR,
-                    (errcode(ERRCODE_CONNECTION_FAILURE),
-                     errmsg("GTM error, could not rename sequence")));
-
-        /* Register a rename callback in case transaction is dropped */
-        register_sequence_rename_cb(seqname, newseqname);
-
-        pfree(seqname);
-        pfree(newseqname);
-    }
-#endif
-
-	/* close rel, but keep lock until commit */
-	relation_close(rel, NoLock);
 }
 
 /*
@@ -10818,7 +10814,7 @@ AlterSeqNamespaces(Relation classRel, Relation rel,
 		{
 			char *seqname = GetGlobalSeqName(seqRel, NULL, NULL);
 			char *newseqname = GetGlobalSeqName(seqRel, NULL,
-			                                    get_namespace_name(newNspOid));
+												get_namespace_name(newNspOid));
 
 			/* We also need to rename it on the GTM */
 			if (RenameSequenceGTM(seqname, newseqname) < 0)

@@ -717,7 +717,7 @@ create_remotequery_plan(PlannerInfo *root, RemoteQueryPath *best_path)
 	/* PGXCTODO - get better estimates */
  	result_node->scan.plan.plan_rows = 1000;
 
-	result_node->has_ins_child_sel_parent = root->parse->is_ins_child_sel_parent;
+	result_node->rq_save_command_id = root->parse->has_to_save_cmd_id;
 	/*
 	 * If there is a pseudoconstant, we should create a gating plan on top of
 	 * this node. We must have included the pseudoconstant qual in the remote
@@ -980,7 +980,7 @@ pgxc_dml_add_qual_to_query(Query *query, int param_num,
  * constraintDeps	: Our DML won't contin any so NULL.
  * sql_statement	: Original query is not required for deparsing
  * is_local			: Not required for deparsing, keep 0
- * is_ins_child_sel_parent	: Not required for deparsing, keep 0
+ * has_to_save_cmd_id	: Not required for deparsing, keep 0
  */
 static void
 pgxc_build_dml_statement(PlannerInfo *root, CmdType cmdtype,
@@ -1105,17 +1105,21 @@ pgxc_build_dml_statement(PlannerInfo *root, CmdType cmdtype,
 	 */
 	if (cmdtype == CMD_UPDATE)
 	{
-		TriggerDesc trigdesc;
-		int natts = get_relnatts(res_rel->relid);
+		int			natts = get_relnatts(res_rel->relid);
+		Relation	rel = relation_open(res_rel->relid, AccessShareLock);
+		bool		br_triggers = pgxc_should_exec_br_trigger(rel,
+										pgxc_get_trigevent(cmdtype));
+
+		relation_close(rel, AccessShareLock);
 
 		/*
-		 * If there is a before-update trigger, we need to update *all* the
-		 * table attributes because the trigger execution might have changed any
-		 * of the tuple attributes. So the UPDATE will look like :
+		 * If we are going to execute BR triggers on coordinator, we need to
+		 * update *all* the table attributes because the trigger execution might
+		 * have changed any of the tuple attributes. So the UPDATE will look
+		 * like :
 		 * UPDATE ... SET att1 = $1, att1 = $2, .... attn = $n WHERE ctid = $(n+1)
 		 */
-		if (pgxc_triggers_getdesc(res_rel->relid, cmdtype, &trigdesc) == true
-		    && trigdesc.trig_update_before_row)
+		if (br_triggers)
 		{
 			int attnum;
 			for (attnum = 1; attnum <= natts; attnum++)
@@ -1371,6 +1375,24 @@ create_remotegrouping_plan(PlannerInfo *root, Plan *local_plan)
 
 	/* Remote grouping is not enabled, don't do anything */
 	if (!enable_remotegroup)
+		return local_plan;
+
+	/* If the query has ungrouped columns which are functionally dependent upon
+	 * grouping columns, we can not push GROUP BY clause and aggregates. The
+	 * reason being two fold
+	 * 1. We generate the query to be pushed down by using a lot of subqueries,
+	 * representing various relations in the JOIN tree. PostreSQL can not handle
+	 * functional dependence involving subqueries. Thus pushing down GROUP BY
+	 * and aggregates results in error, since Datanode/s find ungrouped columns
+	 * in the query which are not part of GROUP BY clause.
+	 * 2. A query with ungrouped columns functionally dependent upon GROUP BY
+	 * columns is likely to produce single row groups (e.g. grouping by primary
+	 * key or unique key etc.). If we push down aggregates in such query, we
+	 * will end up un-necessarily applying combination function at the
+	 * coordinator, thus decreasing the performance. Thus for such queries it's
+	 * unlikely that we will gain performance by pushing down.
+	 */
+	if (query->constraintDeps && list_length(query->constraintDeps) > 0)
 		return local_plan;
 
 	/*
@@ -2311,6 +2333,8 @@ pgxc_handle_exec_direct(Query *query, int cursorOptions,
 static void
 pgxc_handle_unsupported_stmts(Query *query)
 {
+	ListCell *lc;
+
 	/*
 	 * PGXCTODO: This validation will not be removed
 	 * until we support moving tuples from one node to another
@@ -2318,6 +2342,15 @@ pgxc_handle_unsupported_stmts(Query *query)
 	 */
 	if (query->commandType == CMD_UPDATE)
 		validate_part_col_updatable(query);
+
+	foreach(lc, query->cteList)
+	{
+		Query *wqry;
+		CommonTableExpr *cte = (CommonTableExpr *) lfirst(lc);
+		wqry = (Query *)cte->ctequery;
+		if (wqry->commandType == CMD_UPDATE)
+			validate_part_col_updatable(wqry);
+	}
 }
 
 /*
@@ -2545,6 +2578,9 @@ pgxc_FQS_create_remote_plan(Query *query, ExecNodes *exec_nodes, bool is_exec_di
 	 * walker just appends the range tables without copying it.
 	 */
 	query->rtable = list_concat(query->rtable, collected_rtable);
+
+	/* Finally save a handle to this Query structure */
+	query_step->remote_query = copyObject(query);
 
 	return query_step;
 }

@@ -18,10 +18,12 @@
 #include "utils/elog.h"
 #include "miscadmin.h"
 #include "pgxc/pgxc.h"
+#include "postmaster/autovacuum.h"
 
 /* Configuration variables */
 char *GtmHost = "localhost";
 int GtmPort = 6666;
+bool gtm_backup_barrier = false;
 extern bool FirstSnapshotSet;
 
 static GTM_Conn *conn;
@@ -383,16 +385,21 @@ GetNextValGTM(char *seqname)
 {
 	GTM_Sequence ret = -1;
 	GTM_SequenceKeyData seqkey;
+	int	status;
+
 	CheckConnection();
 	seqkey.gsk_keylen = strlen(seqname) + 1;
 	seqkey.gsk_key = seqname;
 
 	if (conn)
-		ret =  get_next(conn, &seqkey);
-	if (ret < 0)
+		status =  get_next(conn, &seqkey, &ret);
+	if (status != GTM_RESULT_OK)
 	{
 		CloseGTM();
 		InitGTM();
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("%s", GTMPQerrorMessage(conn))));
 	}
 	return ret;
 }
@@ -507,3 +514,21 @@ UnregisterGTM(GTM_PGXCNodeType type)
 
 	return ret;
 }
+
+/*
+ * Report BARRIER
+ */
+int
+ReportBarrierGTM(char *barrier_id)
+{
+	if (!gtm_backup_barrier)
+		return;
+
+	CheckConnection();
+
+	if (!conn)
+		return EOF;
+
+	return(report_barrier(conn, barrier_id));
+}
+

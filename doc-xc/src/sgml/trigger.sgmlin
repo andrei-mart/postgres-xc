@@ -275,6 +275,28 @@
     Statement-level triggers do not currently have any way to examine the
     individual row(s) modified by the statement.
    </para>
+
+<!## XC>
+&xconly;
+   <para>
+    In <productname>Postgres-XC</>, statement triggers are always executed
+    on coordinator. Row triggers may or may not be executed on coordinator.
+    If all the triggers triggered by an SQL statement are found to be safe
+    to be executed on datanode, they will be executed on datanode, otherwise,
+    they are executed on coordinator. As in the case of any function, in
+    <productname>Postgres-XC</>, a trigger function when marked immutable
+    is assumed to be safe to run on datanodes. But there are no runtime
+    checks for verifying whether the function causes data inconsistency.
+   </para>
+
+   <para>
+    Note that the presence of row triggers can affect
+    <productname>Postgres-XC</> performance. When row triggers are executed
+    on coordinator, they require OLD and NEW row, which causes all the
+    processed rows to be shipped from datanode to coordinator.
+   </para>
+<!## end>
+
   </sect1>
 
   <sect1 id="trigger-datachanges">
@@ -572,7 +594,7 @@ typedef struct TriggerData
       <listitem>
        <para>
         A pointer to a structure of type <structname>Trigger</>,
-        defined in <filename>utils/rel.h</>:
+        defined in <filename>utils/reltrigger.h</>:
 
 <programlisting>
 typedef struct Trigger
@@ -581,7 +603,7 @@ typedef struct Trigger
     char       *tgname;
     Oid         tgfoid;
     int16       tgtype;
-    bool        tgenabled;
+    char        tgenabled;
     bool        tgisinternal;
     Oid         tgconstrrelid;
     Oid         tgconstrindid;
@@ -629,6 +651,17 @@ typedef struct Trigger
     </variablelist>
    </para>
 
+<!## XC>
+&xconly;
+   <para>
+   In <productname>Postgres-XC</>, both tg_trigtuplebuf and tg_newtuplebuf
+   should always be assumed to be InvalidBuffer. This is because it may or
+   may not be pointing to a disk buffer. For e.g. the trigger function may
+   be executing on coordinator, and at the coordinator the tuple is
+   actually shipped from the datanode.
+   </para>
+<!## end>
+
    <para>
     A trigger function must return either a
     <structname>HeapTuple</> pointer or a <symbol>NULL</> pointer
@@ -670,7 +703,8 @@ CREATE TABLE ttest (
 <programlisting><![CDATA[
 #include "postgres.h"
 #include "executor/spi.h"       /* this is what you need to work with SPI */
-#include "commands/trigger.h"   /* ... and triggers */
+#include "commands/trigger.h"   /* ... triggers ... */
+#include "utils/rel.h"          /* ... and relations */
 
 #ifdef PG_MODULE_MAGIC
 PG_MODULE_MAGIC;

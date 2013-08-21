@@ -538,6 +538,13 @@ AlterSequence(AlterSeqStmt *stmt)
 	/* Check and set new values */
 #ifdef PGXC
 	init_params(stmt->options, false, &new, &owned_by, &is_restart);
+
+	increment = new.increment_by;
+	min_value = new.min_value;
+	max_value = new.max_value;
+	start_value = new.start_value;
+	last_value = new.last_value;
+	cycle = new.is_cycled;
 #else
 	init_params(stmt->options, false, &new, &owned_by);
 #endif
@@ -550,15 +557,6 @@ AlterSequence(AlterSeqStmt *stmt)
 	START_CRIT_SECTION();
 
 	memcpy(seq, &new, sizeof(FormData_pg_sequence));
-
-#ifdef PGXC
-	increment = new.increment_by;
-	min_value = new.min_value;
-	max_value = new.max_value;
-	start_value = new.start_value;
-	last_value = new.last_value;
-	cycle = new.is_cycled;
-#endif
 
 	MarkBufferDirty(buf);
 
@@ -727,10 +725,6 @@ nextval_internal(Oid relid)
 		 * concurrency
 		 */
 		result = (int64) GetNextValGTM(seqname);
-		if (result < 0)
-			ereport(ERROR,
-					(errcode(ERRCODE_CONNECTION_FAILURE),
-					 errmsg("GTM error, could not obtain sequence value")));
 		pfree(seqname);
 
 		/* Update the on-disk data */

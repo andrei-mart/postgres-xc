@@ -160,8 +160,11 @@ typedef struct Query
 	char		*sql_statement;		/* original query */
 	bool		is_local;		/* enforce query execution on local node
 						 * this is used by EXECUTE DIRECT especially. */
-	bool		is_ins_child_sel_parent;/* true if the query is such an INSERT SELECT that
-						 * inserts into a child by selecting from its parent */
+	bool		has_to_save_cmd_id;	/* true if the query is such an INSERT SELECT
+									 * that inserts into a child by selecting
+									 * from its parent OR a WITH query that
+									 * updates a table in main query and inserts
+									 * a row to the same table in WITH query*/
 #endif
 } Query;
 
@@ -1253,9 +1256,9 @@ typedef enum AlterTableType
     AT_AddNodeList,             /* ADD NODE nodelist */
     AT_DeleteNodeList,          /* DELETE NODE nodelist */
 #endif
-    AT_GenericOptions,          /* OPTIONS (...) */
-    /* this will be in a more natural position in 9.3: */
-    AT_ReAddConstraint          /* internal to commands/tablecmds.c */
+	AT_GenericOptions,			/* OPTIONS (...) */
+	/* this will be in a more natural position in 9.3: */
+	AT_ReAddConstraint			/* internal to commands/tablecmds.c */
 } AlterTableType;
 
 typedef struct AlterTableCmd	/* one subcommand of an ALTER TABLE */

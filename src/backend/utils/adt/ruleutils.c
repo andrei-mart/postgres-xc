@@ -212,12 +212,12 @@ static void make_ruledef(StringInfo buf, HeapTuple ruletup, TupleDesc rulettc,
 static void make_viewdef(StringInfo buf, HeapTuple ruletup, TupleDesc rulettc,
 			 int prettyFlags, int wrapColumn);
 static void get_query_def(Query *query, StringInfo buf, List *parentnamespace,
-              TupleDesc resultDesc,
-              int prettyFlags, int wrapColumn, int startIndent
+			  TupleDesc resultDesc,
+			  int prettyFlags, int wrapColumn, int startIndent
 #ifdef PGXC
               , bool finalise_aggregates, bool sortgroup_colno
 #endif /* PGXC */
-                );
+				);
 static void get_values_def(List *values_lists, deparse_context *context);
 static void get_with_clause(Query *query, deparse_context *context);
 static void get_select_query_def(Query *query, deparse_context *context,
@@ -2694,12 +2694,12 @@ make_ruledef(StringInfo buf, HeapTuple ruletup, TupleDesc rulettc,
 		foreach(action, actions)
 		{
 			query = (Query *) lfirst(action);
-            get_query_def(query, buf, NIL, NULL,
-                          prettyFlags, WRAP_COLUMN_DEFAULT, 0
+			get_query_def(query, buf, NIL, NULL,
+						  prettyFlags, WRAP_COLUMN_DEFAULT, 0
 #ifdef PGXC
                             , false, false
 #endif /* PGXC */
-                            );
+			);
 			if (prettyFlags)
 				appendStringInfo(buf, ";\n");
 			else
@@ -2716,12 +2716,12 @@ make_ruledef(StringInfo buf, HeapTuple ruletup, TupleDesc rulettc,
 		Query	   *query;
 
 		query = (Query *) linitial(actions);
-        get_query_def(query, buf, NIL, NULL,
-                      prettyFlags, WRAP_COLUMN_DEFAULT, 0
+		get_query_def(query, buf, NIL, NULL,
+					  prettyFlags, WRAP_COLUMN_DEFAULT, 0
 #ifdef PGXC
                         , false, false
 #endif /* PGXC */
-                        );
+		);
 		appendStringInfo(buf, ";");
 	}
 }
@@ -2788,12 +2788,12 @@ make_viewdef(StringInfo buf, HeapTuple ruletup, TupleDesc rulettc,
 
 	ev_relation = heap_open(ev_class, AccessShareLock);
 
-    get_query_def(query, buf, NIL, RelationGetDescr(ev_relation),
-                  prettyFlags, wrapColumn, 0
+	get_query_def(query, buf, NIL, RelationGetDescr(ev_relation),
+				  prettyFlags, wrapColumn, 0
 #ifdef PGXC
                   , false, false
 #endif /* PGXC */
-		);
+				  );
 	appendStringInfo(buf, ";");
 
 	heap_close(ev_relation, AccessShareLock);
@@ -2805,15 +2805,62 @@ make_viewdef(StringInfo buf, HeapTuple ruletup, TupleDesc rulettc,
  * deparse_query			- Parse back one query parsetree
  *
  * Purpose of this function is to build up statement for a RemoteQuery
- * It just calls get_query_def without pretty print flags
+ * The query generated has all object names schema-qualified. This is
+ * done by temporarily setting search_path to NIL.
+ * It calls get_query_def without pretty print flags.
  * ----------
  */
 void
 deparse_query(Query *query, StringInfo buf, List *parentnamespace,
 				bool finalise_aggs, bool sortgroup_colno)
 {
+	OverrideSearchPath	*tmp_search_path;
+	List				*schema_list;
+	ListCell			*schema;
+
+	/*
+	 * Before deparsing the query, set the search_patch to NIL so that all the
+	 * object names in the deparsed query are schema qualified. This is required
+	 * so as to not have any dependency on current search_path. For e.g the same
+	 * remote query can be used even if search_path changes between two executes
+	 * of a prepared statement.
+	 * Note: We do not apply the above solution for temp tables for reasons shown
+	 * in the below comment.
+	 */
+	tmp_search_path = GetOverrideSearchPath(CurrentMemoryContext);
+
+	tmp_search_path->addTemp = true;
+	schema_list = tmp_search_path->schemas;
+	foreach(schema, schema_list)
+	{
+		if (isTempNamespace(lfirst_oid(schema)))
+		{
+			 /* Is pg_temp the very first item ? If no, that means temp objects
+			  * should be qualified, otherwise the object name would possibly
+			  * be resolved from some other schema. We force schema
+			  * qualification by making sure the overridden search_path does not
+			  * have pg_temp implicitly added.
+			  * Why do we not *always* let the pg_temp qualification be there ?
+			  * Because the pg_temp schema name always gets deparsed into the
+			  * actual temp schema names like pg_temp_[1-9]*, and not the dummy
+			  * name pg_temp. And we do not want to use these names because
+			  * they are specific to the local node. pg_temp_2.obj1 at node 1
+			  * may be present in pg_temp_3 at node2.
+			  */
+			if (list_head(schema_list) != schema)
+				tmp_search_path->addTemp = false;
+
+			break;
+		}
+	}
+
+	tmp_search_path->schemas = NIL;
+	PushOverrideSearchPath(tmp_search_path);
+
 	get_query_def(query, buf, parentnamespace, NULL, 0, WRAP_COLUMN_DEFAULT,
 					0, finalise_aggs, sortgroup_colno);
+
+	PopOverrideSearchPath();
 }
 #endif
 /* ----------
@@ -2825,12 +2872,12 @@ deparse_query(Query *query, StringInfo buf, List *parentnamespace,
  */
 static void
 get_query_def(Query *query, StringInfo buf, List *parentnamespace,
-              TupleDesc resultDesc,
-              int prettyFlags, int wrapColumn, int startIndent
+			  TupleDesc resultDesc,
+			  int prettyFlags, int wrapColumn, int startIndent
 #ifdef PGXC
                 , bool finalise_aggs, bool sortgroup_colno
 #endif /* PGXC */
-              )
+			  )
 {
 	deparse_context context;
 	deparse_namespace dpns;
@@ -2992,13 +3039,13 @@ get_with_clause(Query *query, deparse_context *context)
 		appendStringInfoString(buf, " AS (");
 		if (PRETTY_INDENT(context))
 			appendContextKeyword(context, "", 0, 0, 0);
-        get_query_def((Query *) cte->ctequery, buf, context->namespaces, NULL,
-                      context->prettyFlags, context->wrapColumn,
-                      context->indentLevel
+		get_query_def((Query *) cte->ctequery, buf, context->namespaces, NULL,
+					  context->prettyFlags, context->wrapColumn,
+					  context->indentLevel
 #ifdef PGXC
                       , context->finalise_aggs, context->sortgroup_colno
 #endif /* PGXC */
-                      );
+					  );
 		if (PRETTY_INDENT(context))
 			appendContextKeyword(context, "", 0, 0, 0);
 		appendStringInfoChar(buf, ')');
@@ -3233,18 +3280,12 @@ get_target_list(List *targetList, deparse_context *context,
 	char	   *sep;
 	int			colno;
 	ListCell   *l;
-    /* Koichi:
-     * Somehow the next line is duplicate.
-     */
-#if 0
-    bool        last_was_multiline = false;
-#endif
 #ifdef PGXC
     bool no_targetlist = true;
 #endif
 
-    /* we use targetbuf to hold each TLE's text temporarily */
-    initStringInfo(&targetbuf);
+	/* we use targetbuf to hold each TLE's text temporarily */
+	initStringInfo(&targetbuf);
 
 	sep = " ";
 	colno = 0;
@@ -3401,13 +3442,13 @@ get_setop_query(Node *setOp, Query *query, deparse_context *context,
 					  subquery->limitCount);
 		if (need_paren)
 			appendStringInfoChar(buf, '(');
-        get_query_def(subquery, buf, context->namespaces, resultDesc,
-                      context->prettyFlags, context->wrapColumn,
-                      context->indentLevel
+		get_query_def(subquery, buf, context->namespaces, resultDesc,
+					  context->prettyFlags, context->wrapColumn,
+					  context->indentLevel
 #ifdef PGXC
                       , context->finalise_aggs, context->sortgroup_colno
 #endif /* PGXC */
-                      );
+					  );
 		if (need_paren)
 			appendStringInfoChar(buf, ')');
 	}
@@ -3860,13 +3901,13 @@ get_insert_query_def(Query *query, deparse_context *context)
 	if (select_rte)
 	{
 		/* Add the SELECT */
-        get_query_def(select_rte->subquery, buf, NIL, NULL,
-                      context->prettyFlags, context->wrapColumn,
-                      context->indentLevel
+		get_query_def(select_rte->subquery, buf, NIL, NULL,
+					  context->prettyFlags, context->wrapColumn,
+					  context->indentLevel
 #ifdef PGXC
                       , context->finalise_aggs, context->sortgroup_colno
 #endif /* PGXC */
-                      );
+					  );
 	}
 	else if (values_rte)
 	{
@@ -7036,13 +7077,13 @@ get_sublink_expr(SubLink *sublink, deparse_context *context)
 	if (need_paren)
 		appendStringInfoChar(buf, '(');
 
-    get_query_def(query, buf, context->namespaces, NULL,
-                  context->prettyFlags, context->wrapColumn,
-                  context->indentLevel
+	get_query_def(query, buf, context->namespaces, NULL,
+				  context->prettyFlags, context->wrapColumn,
+				  context->indentLevel
 #ifdef PGXC
                   , context->finalise_aggs, context->sortgroup_colno
 #endif /* PGXC */
-                  );
+				  );
 
 	if (need_paren)
 		appendStringInfo(buf, "))");
@@ -7165,24 +7206,13 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 			case RTE_SUBQUERY:
 				/* Subquery RTE */
 				appendStringInfoChar(buf, '(');
-                get_query_def(rte->subquery, buf, context->namespaces, NULL,
-                              context->prettyFlags, context->wrapColumn,
-                 /* Koichi:
-                  * The following block has another problem in adding XC-specific
-                  * argument extension.
-                  */
-#if 0
-                              context->indentLevel
+				get_query_def(rte->subquery, buf, context->namespaces, NULL,
+							  context->prettyFlags, context->wrapColumn,
+							  context->indentLevel
 #ifdef PGXC
-                              context->finalise_aggs, context->sortgroup_colno
+							  , context->finalise_aggs, context->sortgroup_colno
 #endif /* PGXC */
-#else
-                              context->indentLevel,
-#ifdef PGXC
-                              context->finalise_aggs, context->sortgroup_colno
-#endif /* PGXC */
-#endif
-                              );
+							  );
 				appendStringInfoChar(buf, ')');
 				break;
 			case RTE_FUNCTION:

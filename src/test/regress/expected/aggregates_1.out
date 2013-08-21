@@ -690,7 +690,7 @@ select min(f1), max(f1) from minmaxtest;
 (1 row)
 
 -- DISTINCT doesn't do anything useful here, but it shouldn't fail
-explain (costs off)
+explain (costs off, num_nodes off, nodes off)
   select distinct min(f1), max(f1) from minmaxtest;
                                QUERY PLAN                               
 ------------------------------------------------------------------------
@@ -698,14 +698,10 @@ explain (costs off)
    ->  Aggregate
          ->  Append
                ->  Data Node Scan on minmaxtest "_REMOTE_TABLE_QUERY_"
-                     Node/s: dn1, dn2
                ->  Data Node Scan on minmaxtest1 "_REMOTE_TABLE_QUERY_"
-                     Node/s: dn1, dn2
                ->  Data Node Scan on minmaxtest2 "_REMOTE_TABLE_QUERY_"
-                     Node/s: dn1, dn2
                ->  Data Node Scan on minmaxtest3 "_REMOTE_TABLE_QUERY_"
-                     Node/s: dn1, dn2
-(11 rows)
+(7 rows)
 
 select distinct min(f1), max(f1) from minmaxtest;
  min | max 

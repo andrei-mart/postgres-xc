@@ -2347,7 +2347,7 @@ begin
     open c1(param2 := 20, 21);
 end
 $$ language plpgsql;
-ERROR:  duplicate value for cursor "c1" parameter "param2"
+ERROR:  value for parameter "param2" of cursor "c1" specified more than once
 LINE 5:     open c1(param2 := 20, 21);
                                   ^
 -- mixing named and positional: same as previous test, but param1 is duplicated
@@ -2358,7 +2358,7 @@ begin
     open c1(20, param1 := 21);
 end
 $$ language plpgsql;
-ERROR:  duplicate value for cursor "c1" parameter "param1"
+ERROR:  value for parameter "param1" of cursor "c1" specified more than once
 LINE 5:     open c1(20, param1 := 21);
                         ^
 -- duplicate named parameter, should throw an error at parse time
@@ -2370,7 +2370,7 @@ begin
   open c1 (p2 := 77, p2 := 42);
 end
 $$ language plpgsql;
-ERROR:  duplicate value for cursor "c1" parameter "p2"
+ERROR:  value for parameter "p2" of cursor "c1" specified more than once
 LINE 6:   open c1 (p2 := 77, p2 := 42);
                              ^
 -- not enough parameters, should throw an error at parse time
@@ -2417,7 +2417,7 @@ end $$ language plpgsql;
 select namedparmcursor_test8();
  namedparmcursor_test8 
 -----------------------
-                     2
+                     0
 (1 row)
 
 -- cursor parameter name can match plpgsql variable or unreserved keyword
@@ -2436,7 +2436,7 @@ end $$ language plpgsql;
 select namedparmcursor_test9(6);
  namedparmcursor_test9 
 -----------------------
-                     2
+                     1
 (1 row)
 
 --
@@ -3459,7 +3459,7 @@ create temp table forc_test as
   select n as i, n as j from generate_series(1,10) n;
 create or replace function forc01() returns void as $$
 declare
-  c cursor for select * from forc_test;
+  c cursor for select * from forc_test order by 1;
 begin
   for r in c loop
     raise notice '%, %', r.i, r.j;
@@ -3493,7 +3493,7 @@ declare
   c refcursor := 'fooled_ya';
   r record;
 begin
-  open c for select * from forc_test;
+  open c for select * from forc_test order by 1;
   loop
     fetch c into r;
     exit when not found;
@@ -4232,6 +4232,21 @@ ERROR:  current transaction is aborted, commands ignored until end of transactio
 rollback;
 drop function error2(p_name_table text);
 drop function error1(text);
+-- Test for consistent reporting of error context
+create function fail() returns int language plpgsql as $$
+begin
+  return 1/0;
+end
+$$;
+select fail();
+ERROR:  division by zero
+CONTEXT:  SQL statement "SELECT 1/0"
+PL/pgSQL function fail() line 3 at RETURN
+select fail();
+ERROR:  division by zero
+CONTEXT:  SQL statement "SELECT 1/0"
+PL/pgSQL function fail() line 3 at RETURN
+drop function fail();
 -- Test handling of string literals.
 set standard_conforming_strings = off;
 create or replace function strtest() returns text as $$

@@ -1,4 +1,6 @@
 set client_min_messages=warning;
+-- Lets not reuse int4_tbl & int8_tbl
+-- so that this test could be run independently
 create table xc_int8_tbl(q1 int8, q2 int8);
 INSERT INTO xc_int8_tbl VALUES('  123   ','  456');
 INSERT INTO xc_int8_tbl VALUES('123   ','4567890123456789');
@@ -11,6 +13,9 @@ INSERT INTO xc_int4_tbl(f1) VALUES ('123456     ');
 INSERT INTO xc_int4_tbl(f1) VALUES ('    -123456');
 INSERT INTO xc_int4_tbl(f1) VALUES ('2147483647');
 INSERT INTO xc_int4_tbl(f1) VALUES ('-2147483647');
+-- The tables have to be created on a well defined set of nodes
+-- independent of the nodes available in the cluster
+-- so that ctid returning tests produce predictable tests
 select create_table_nodes('rep_foo(a int, b int)', '{1, 2}'::int[], 'replication', NULL);
  create_table_nodes 
 --------------------
@@ -35,18 +40,78 @@ select create_table_nodes('tc (fc int) INHERITS (tp)', '{2}'::int[], 'hash(f1)',
  
 (1 row)
 
-create table parent(a int, b int);
-create table child (c int) INHERITS (parent);
-create table grand_child (d int) INHERITS (child);
-create table fp(f1 int, f2 varchar(255), f3 int);
-create table fp_child (fc int) INHERITS (fp);
-create table bar(c1 int, c2 int);
-create table ta1 (v1 int, v2 int);
-create table ta2 (v1 int, v2 int);
-create table sal_emp (name text, pay_by_quarter integer[], schedule text[][]);
-create table products(product_id serial PRIMARY KEY ,product_name varchar(150),price numeric(10,2) ) ;
-create table my_tab(f1 int, f2 text, f3 int);
-create table my_tab2(f1 int, f2 text, f3 int);
+select create_table_nodes('parent(a int, b int)', '{1, 2}'::int[], 'hash(a)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
+select create_table_nodes('child (c int) INHERITS (parent)', '{1, 2}'::int[], 'hash(a)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
+select create_table_nodes('grand_child (d int) INHERITS (child)', '{1, 2}'::int[], 'hash(a)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
+select create_table_nodes('fp(f1 int, f2 varchar(255), f3 int)', '{1, 2}'::int[], 'hash(f1)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
+select create_table_nodes('fp_child (fc int) INHERITS (fp)', '{1, 2}'::int[], 'hash(f1)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
+select create_table_nodes('bar(c1 int, c2 int)', '{1, 2}'::int[], 'hash(c1)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
+select create_table_nodes('ta1 (v1 int, v2 int)', '{1, 2}'::int[], 'hash(v1)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
+select create_table_nodes('ta2 (v1 int, v2 int)', '{1, 2}'::int[], 'hash(v1)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
+select create_table_nodes('sal_emp (name text, pay_by_quarter integer[], schedule text[][])', '{1, 2}'::int[], 'hash(name)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
+select create_table_nodes('products(product_id serial PRIMARY KEY ,product_name varchar(150),price numeric(10,2) )', '{1, 2}'::int[], 'hash(product_id)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
+select create_table_nodes('my_tab(f1 int, f2 text, f3 int)', '{1, 2}'::int[], 'hash(f1)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
+select create_table_nodes('my_tab2(f1 int, f2 text, f3 int)', '{1, 2}'::int[], 'hash(f1)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
 create or replace function fn_immutable(integer) RETURNS integer
     AS 'SELECT f3+$1 from my_tab2 where f1=1;'
     LANGUAGE SQL
@@ -68,7 +133,12 @@ select create_table_nodes('numbers(a int, b varchar(255), c int)', '{1, 2}'::int
  
 (1 row)
 
-create table test_tab(a int, b varchar(255), c varchar(255), d int);
+select create_table_nodes('test_tab(a int, b varchar(255), c varchar(255), d int)', '{1, 2}'::int[], 'hash(a)', NULL);
+ create_table_nodes 
+--------------------
+ 
+(1 row)
+
 ------------------------------------------------------------------------------------------
 ------------------------------------------------------------------------------------------
 -- INSERT Returning
@@ -498,15 +568,15 @@ UPDATE fp SET f4 = f4 + f3 WHERE f4 = 99;
 ---------------------------------------------------------------------------------------------------------------------------------------------
  Update on public.fp
    Node expr: public.fp.f1
-   Remote query: UPDATE ONLY fp SET f4 = $4 WHERE ((public.fp.ctid = $5) AND (public.fp.xc_node_id = $6))
+   Remote query: UPDATE ONLY public.fp SET f4 = $4 WHERE ((public.fp.ctid = $5) AND (public.fp.xc_node_id = $6))
    Node expr: fp.f1
-   Remote query: UPDATE ONLY fp_child fp SET f4 = $5 WHERE ((fp.ctid = $6) AND (fp.xc_node_id = $7))
+   Remote query: UPDATE ONLY public.fp_child fp SET f4 = $5 WHERE ((fp.ctid = $6) AND (fp.xc_node_id = $7))
    ->  Data Node Scan on fp "_REMOTE_TABLE_QUERY_"
          Output: public.fp.f1, public.fp.f2, public.fp.f3, (public.fp.f4 + public.fp.f3), public.fp.f4, public.fp.ctid, public.fp.xc_node_id
-         Remote query: SELECT f1, f2, f3, f4, ctid, xc_node_id FROM ONLY fp WHERE (f4 = 99)
+         Remote query: SELECT f1, f2, f3, f4, ctid, xc_node_id FROM ONLY public.fp WHERE (f4 = 99)
    ->  Data Node Scan on fp_child "_REMOTE_TABLE_QUERY_"
          Output: fp.f1, fp.f2, fp.f3, fp.f4, (fp.f4 + fp.f3), fp.f4, fp.ctid, fp.xc_node_id
-         Remote query: SELECT f1, f2, f3, fc, f4, ctid, xc_node_id FROM ONLY fp_child fp WHERE (f4 = 99)
+         Remote query: SELECT f1, f2, f3, fc, f4, ctid, xc_node_id FROM ONLY public.fp_child fp WHERE (f4 = 99)
 (11 rows)
 
 explain (costs off, num_nodes off, nodes off, verbose on)
@@ -515,62 +585,62 @@ UPDATE fp SET f3 = f3*2  FROM xc_int8_tbl i  WHERE fp.f1 = i.q2;
 ------------------------------------------------------------------------------------------------------------------------------------------
  Update on public.fp
    Node expr: public.fp.f1
-   Remote query: UPDATE ONLY fp SET f3 = $3 WHERE ((public.fp.ctid = $5) AND (public.fp.xc_node_id = $6))
+   Remote query: UPDATE ONLY public.fp SET f3 = $3 WHERE ((public.fp.ctid = $5) AND (public.fp.xc_node_id = $6))
    Node expr: fp.f1
-   Remote query: UPDATE ONLY fp_child fp SET f3 = $3 WHERE ((fp.ctid = $6) AND (fp.xc_node_id = $7))
+   Remote query: UPDATE ONLY public.fp_child fp SET f3 = $3 WHERE ((fp.ctid = $6) AND (fp.xc_node_id = $7))
    ->  Hash Join
          Output: public.fp.f1, public.fp.f2, (public.fp.f3 * 2), public.fp.f4, public.fp.f1, public.fp.ctid, public.fp.xc_node_id, i.ctid
          Hash Cond: (public.fp.f1 = i.q2)
          ->  Data Node Scan on fp "_REMOTE_TABLE_QUERY_"
                Output: public.fp.f1, public.fp.f2, public.fp.f3, public.fp.f4, public.fp.ctid, public.fp.xc_node_id
-               Remote query: SELECT f1, f2, f3, f4, ctid, xc_node_id FROM ONLY fp WHERE true
+               Remote query: SELECT f1, f2, f3, f4, ctid, xc_node_id FROM ONLY public.fp WHERE true
          ->  Hash
                Output: i.ctid, i.q2
                ->  Data Node Scan on xc_int8_tbl "_REMOTE_TABLE_QUERY_"
                      Output: i.ctid, i.q2
-                     Remote query: SELECT ctid, q2 FROM ONLY xc_int8_tbl i WHERE true
+                     Remote query: SELECT ctid, q2 FROM ONLY public.xc_int8_tbl i WHERE true
    ->  Hash Join
          Output: fp.f1, fp.f2, (fp.f3 * 2), fp.f4, fp.f4, fp.f1, fp.ctid, fp.xc_node_id, i.ctid
          Hash Cond: (fp.f1 = i.q2)
          ->  Data Node Scan on fp_child "_REMOTE_TABLE_QUERY_"
                Output: fp.f1, fp.f2, fp.f3, fp.f4, fp.f4, fp.ctid, fp.xc_node_id
-               Remote query: SELECT f1, f2, f3, fc, f4, ctid, xc_node_id FROM ONLY fp_child fp WHERE true
+               Remote query: SELECT f1, f2, f3, fc, f4, ctid, xc_node_id FROM ONLY public.fp_child fp WHERE true
          ->  Hash
                Output: i.ctid, i.q2
                ->  Data Node Scan on xc_int8_tbl "_REMOTE_TABLE_QUERY_"
                      Output: i.ctid, i.q2
-                     Remote query: SELECT ctid, q2 FROM ONLY xc_int8_tbl i WHERE true
+                     Remote query: SELECT ctid, q2 FROM ONLY public.xc_int8_tbl i WHERE true
 (27 rows)
 
 explain (costs off, num_nodes off, nodes off, verbose on)
 update fp_child set fc=fc+2 returning *, f4-f1;
-                                                                                       QUERY PLAN                                                                                       
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                          QUERY PLAN                                                                                           
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Update on public.fp_child
    Output: fp_child.f1, fp_child.f2, fp_child.f3, fp_child.fc, fp_child.f4, (fp_child.f4 - fp_child.f1)
    Node expr: fp_child.f1
-   Remote query: UPDATE ONLY fp_child SET fc = $4 WHERE ((fp_child.ctid = $6) AND (fp_child.xc_node_id = $7)) RETURNING fp_child.f1, fp_child.f2, fp_child.f3, fp_child.fc, fp_child.f4
+   Remote query: UPDATE ONLY public.fp_child SET fc = $4 WHERE ((fp_child.ctid = $6) AND (fp_child.xc_node_id = $7)) RETURNING fp_child.f1, fp_child.f2, fp_child.f3, fp_child.fc, fp_child.f4
    ->  Data Node Scan on fp_child "_REMOTE_TABLE_QUERY_"
          Output: fp_child.f1, fp_child.f2, fp_child.f3, (fp_child.fc + 2), fp_child.f4, fp_child.ctid, fp_child.xc_node_id
-         Remote query: SELECT f1, f2, f3, fc, f4, ctid, xc_node_id FROM ONLY fp_child WHERE true
+         Remote query: SELECT f1, f2, f3, fc, f4, ctid, xc_node_id FROM ONLY public.fp_child WHERE true
 (7 rows)
 
 explain (costs off, num_nodes off, nodes off, verbose on)
 update fp set f3 = f3 + 1 where f1<2 returning *, f3-f1;
-                                                                                QUERY PLAN                                                                                 
----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                    QUERY PLAN                                                                                    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Update on public.fp
    Output: public.fp.f1, public.fp.f2, public.fp.f3, public.fp.f4, (public.fp.f3 - public.fp.f1)
    Node expr: public.fp.f1
-   Remote query: UPDATE ONLY fp SET f3 = $3 WHERE ((public.fp.ctid = $5) AND (public.fp.xc_node_id = $6)) RETURNING public.fp.f1, public.fp.f2, public.fp.f3, public.fp.f4
+   Remote query: UPDATE ONLY public.fp SET f3 = $3 WHERE ((public.fp.ctid = $5) AND (public.fp.xc_node_id = $6)) RETURNING public.fp.f1, public.fp.f2, public.fp.f3, public.fp.f4
    Node expr: fp.f1
-   Remote query: UPDATE ONLY fp_child fp SET f3 = $3 WHERE ((fp.ctid = $6) AND (fp.xc_node_id = $7)) RETURNING fp.f1, fp.f2, fp.f3, fp.f4
+   Remote query: UPDATE ONLY public.fp_child fp SET f3 = $3 WHERE ((fp.ctid = $6) AND (fp.xc_node_id = $7)) RETURNING fp.f1, fp.f2, fp.f3, fp.f4
    ->  Data Node Scan on fp "_REMOTE_TABLE_QUERY_"
          Output: public.fp.f1, public.fp.f2, (public.fp.f3 + 1), public.fp.f4, public.fp.f1, public.fp.ctid, public.fp.xc_node_id
-         Remote query: SELECT f1, f2, f3, f4, ctid, xc_node_id FROM ONLY fp WHERE (f1 < 2)
+         Remote query: SELECT f1, f2, f3, f4, ctid, xc_node_id FROM ONLY public.fp WHERE (f1 < 2)
    ->  Data Node Scan on fp_child "_REMOTE_TABLE_QUERY_"
          Output: fp.f1, fp.f2, (fp.f3 + 1), fp.f4, fp.f4, fp.f1, fp.ctid, fp.xc_node_id
-         Remote query: SELECT f1, f2, f3, fc, f4, ctid, xc_node_id FROM ONLY fp_child fp WHERE (f1 < 2)
+         Remote query: SELECT f1, f2, f3, fc, f4, ctid, xc_node_id FROM ONLY public.fp_child fp WHERE (f1 < 2)
 (12 rows)
 
 UPDATE fp SET f4 = f4 + f3 WHERE f4 = 99;
@@ -1295,6 +1365,51 @@ select * from t order by 1,2,3,4;
 (4 rows)
 
 truncate table test_tab;
+-------------------------------------------------------------
+-- A few tests to verify # of tuples processed.
+-------------------------------------------------------------
+\set QUIET false
+-------------------------------------------------------------
+-- Number of rows processed for query having RETURNING.
+-- The UPDATE runs twice, but for the second row it does not actually update
+-- the row and hence returns NULL. The UPDATE tag should show UPDATE 1,
+-- as against UPDATE 2.
+-------------------------------------------------------------
+CREATE TABLE xcreturn_foo (c1 int, c2 int);
+CREATE TABLE
+INSERT INTO xcreturn_foo VALUES (1,2), (3,4);
+INSERT 0 2
+CREATE TABLE xcreturn_bar(c3 int, c4 int);
+CREATE TABLE
+INSERT INTO xcreturn_bar VALUES(123,456);
+INSERT 0 1
+INSERT INTO xcreturn_bar VALUES(123,789);
+INSERT 0 1
+update xcreturn_foo set c2=c2*2 from xcreturn_bar b WHERE xcreturn_foo.c1+122 = b.c3 RETURNING *;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  1 |  4 | 123 | 789
+(1 row)
+
+UPDATE 1
+drop table xcreturn_foo, xcreturn_bar;
+DROP TABLE
+-------------------------------------------------------------
+-- Number of rows processed query having WITH and RETURNING.
+-- Following WITH query updates runs so should show UPDATE 2.
+-------------------------------------------------------------
+create table xcreturn_tab1 (id int, v varchar) distribute by replication;
+CREATE TABLE
+create table xcreturn_tab2 (id int, v varchar) distribute by replication;
+CREATE TABLE
+insert into xcreturn_tab1 values (1, 'firstrow'), (2, 'secondrow');
+INSERT 0 2
+WITH wcte AS ( INSERT INTO xcreturn_tab2 VALUES (999, 'opop'), (333, 'sss') , ( 42, 'new' ), (55, 'ppp') RETURNING id AS newid )
+UPDATE xcreturn_tab1 SET id = id + newid FROM wcte;
+UPDATE 2
+drop table xcreturn_tab1, xcreturn_tab2;
+DROP TABLE
+\set QUIET true
 -------------------------------------------------------------
 -- clean up
 -------------------------------------------------------------

@@ -275,6 +275,8 @@ COPY main_table FROM stdin;
 123	999
 456	999
 \.
+;
+
 DELETE FROM main_table WHERE a IN (123, 456);
 UPDATE main_table SET a = 50, b = 60;
 SELECT * FROM main_table ORDER BY a, b;
@@ -957,7 +959,7 @@ UPDATE city_view v SET population = 599657
 
 \set QUIET true
 
-SELECT * FROM city_view;
+SELECT * FROM city_view order by 1;
 
 DROP TABLE city_table CASCADE;
 DROP TABLE country_table;

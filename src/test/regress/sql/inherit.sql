@@ -376,7 +376,7 @@ DROP TABLE test_constraints;
 CREATE TABLE test_ex_constraints (
     c circle,
     EXCLUDE USING gist (c WITH &&)
-);
+) DISTRIBUTE BY REPLICATION;
 CREATE TABLE test_ex_constraints_inh () INHERITS (test_ex_constraints);
 \d+ test_ex_constraints
 ALTER TABLE test_ex_constraints DROP CONSTRAINT test_ex_constraints_c_excl;
@@ -402,12 +402,12 @@ DROP TABLE test_primary_constraints;
 -- Test parameterized append plans for inheritance trees
 --
 
-create table patest0 (id, x) as
+create temp table patest0 (id, x) as
   select x, x from generate_series(0,1000) x;
-create table patest1() inherits (patest0);
+create temp table patest1() inherits (patest0);
 insert into patest1
   select x, x from generate_series(0,1000) x;
-create table patest2() inherits (patest0);
+create temp table patest2() inherits (patest0);
 insert into patest2
   select x, x from generate_series(0,1000) x;
 create index patest0i on patest0(id);
@@ -418,14 +418,14 @@ analyze patest1;
 analyze patest2;
 
 explain (costs off, num_nodes off, nodes off)
-select * from patest0 join (select f1 from int4_tbl limit 1) ss on id = f1;
-select * from patest0 join (select f1 from int4_tbl limit 1) ss on id = f1;
+select * from patest0 join (select f1 from int4_tbl where f1 >= 0 order by f1 limit 1) ss on id = f1;
+select * from patest0 join (select f1 from int4_tbl where f1 >= 0 order by f1 limit 1) ss on id = f1;
 
 drop index patest2i;
 
 explain (costs off, num_nodes off, nodes off)
-select * from patest0 join (select f1 from int4_tbl limit 1) ss on id = f1;
-select * from patest0 join (select f1 from int4_tbl limit 1) ss on id = f1;
+select * from patest0 join (select f1 from int4_tbl where f1 >= 0 order by f1 limit 1) ss on id = f1;
+select * from patest0 join (select f1 from int4_tbl where f1 >= 0 order by f1 limit 1) ss on id = f1;
 
 drop table patest0 cascade;
 

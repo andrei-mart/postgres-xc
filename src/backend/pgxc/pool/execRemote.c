@@ -26,6 +26,9 @@
 #include "catalog/pg_type.h"
 #include "catalog/pgxc_node.h"
 #include "commands/prepare.h"
+#ifdef PGXC
+#include "commands/trigger.h"
+#endif
 #include "executor/executor.h"
 #include "gtm/gtm_c.h"
 #include "libpq/libpq.h"
@@ -176,6 +179,8 @@ static void SetDataRowForIntParams(JunkFilter *junkfilter,
 					   RemoteQueryState *rq_state);
 static void pgxc_append_param_val(StringInfo buf, Datum val, Oid valtype);
 static void pgxc_append_param_junkval(TupleTableSlot *slot, AttrNumber attno, Oid valtype, StringInfo buf);
+static void pgxc_rq_fire_bstriggers(RemoteQueryState *node);
+static void pgxc_rq_fire_astriggers(RemoteQueryState *node);
 
 /*
  * Create a structure to store parameters needed to combine responses from
@@ -215,6 +220,7 @@ CreateResponseCombiner(int node_count, CombineType combine_type)
 	combiner->remoteCopyType = REMOTE_COPY_NONE;
 	combiner->copy_file = NULL;
 	combiner->rqs_cmd_id = FirstCommandId;
+	combiner->rqs_processed = 0;
 
 	return combiner;
 }
@@ -334,43 +340,55 @@ static void
 HandleCommandComplete(RemoteQueryState *combiner, char *msg_body, size_t len, PGXCNodeHandle *conn)
 {
 	int 			digits = 0;
-	EState		   *estate = combiner->ss.ps.state;
+	bool			non_fqs_dml;
 
+	/* Is this a DML query that is not FQSed ? */
+	non_fqs_dml = (combiner->ss.ps.plan &&
+					((RemoteQuery*)combiner->ss.ps.plan)->rq_params_internal);
 	/*
 	 * If we did not receive description we are having rowcount or OK response
 	 */
 	if (combiner->request_type == REQUEST_TYPE_NOT_DEFINED)
 		combiner->request_type = REQUEST_TYPE_COMMAND;
 	/* Extract rowcount */
-	if (combiner->combine_type != COMBINE_TYPE_NONE && estate)
+	if (combiner->combine_type != COMBINE_TYPE_NONE)
 	{
 		uint64	rowcount;
 		digits = parse_row_count(msg_body, len, &rowcount);
 		if (digits > 0)
 		{
+			/*
+			 * PGXC TODO: Need to completely remove the dependency on whether
+			 * it's an FQS or non-FQS DML query. For this, command_complete_count
+			 * needs to be better handled. Currently this field is being updated
+			 * for each iteration of FetchTuple by re-using the same combiner
+			 * for each iteration, whereas it seems it should be updated only
+			 * for each node execution, not for each tuple fetched.
+			 */
+
 			/* Replicated write, make sure they are the same */
 			if (combiner->combine_type == COMBINE_TYPE_SAME)
 			{
 				if (combiner->command_complete_count)
 				{
-					/*
-					 * For comments on why non_fqs_dml is required
-					 * see comments in ExecProcNodeDMLInXC
-					 */
-					if (rowcount != estate->es_processed && !combiner->non_fqs_dml)
-						/* There is a consistency issue in the database with the replicated table */
+					/* For FQS, check if there is a consistency issue with replicated table. */
+					if (rowcount != combiner->rqs_processed && !non_fqs_dml)
 						ereport(ERROR,
 								(errcode(ERRCODE_DATA_CORRUPTED),
-								 errmsg("Write to replicated table returned different results from the Datanodes")));
+								 errmsg("Write to replicated table returned"
+										"different results from the Datanodes")));
 				}
-				else
-					/* first result */
-					if (!combiner->non_fqs_dml)
-						estate->es_processed = rowcount;
+				/* Always update the row count. We have initialized it to 0 */
+				combiner->rqs_processed = rowcount;
 			}
 			else
-				if (!combiner->non_fqs_dml)
-					estate->es_processed += rowcount;
+				combiner->rqs_processed += rowcount;
+
+			/*
+			 * This rowcount will be used to increment estate->es_processed
+			 * either in ExecInsert/Update/Delete for non-FQS query, or will
+			 * used in RemoteQueryNext() for FQS query.
+			 */
 		}
 		else
 			combiner->combine_type = COMBINE_TYPE_NONE;
@@ -2540,9 +2558,9 @@ ExecInitRemoteQuery(RemoteQuery *node, EState *estate, int eflags)
 	ExecAssignResultTypeFromTL(&remotestate->ss.ps);
 	ExecAssignScanProjectionInfo(&remotestate->ss);
 
-	if (node->has_ins_child_sel_parent)
+	if (node->rq_save_command_id)
 	{
-		/* Save command id of the insert-select query */
+		/* Save command id to be used in some special cases */
 		remotestate->rqs_cmd_id = GetCurrentCommandId(false);
 	}
 
@@ -2592,6 +2610,14 @@ get_exec_connections(RemoteQueryState *planstate,
 												isnull,
 												exprType((Node *) exec_nodes->en_expr),
 												exec_nodes->accesstype);
+			/*
+			 * en_expr is set by pgxc_set_en_expr only for distributed
+			 * relations while planning DMLs, hence a select for update
+			 * on a replicated table here is an assertion
+			 */
+			Assert(!(exec_nodes->accesstype == RELATION_ACCESS_READ_FOR_UPDATE &&
+						IsRelationReplicated(rel_loc_info)));
+
 			if (nodes)
 			{
 				nodelist = nodes->nodeList;
@@ -2604,6 +2630,13 @@ get_exec_connections(RemoteQueryState *planstate,
 		{
 			RelationLocInfo *rel_loc_info = GetRelationLocInfo(exec_nodes->en_relid);
 			ExecNodes *nodes = GetRelationNodes(rel_loc_info, 0, true, InvalidOid, exec_nodes->accesstype);
+
+			/*
+			 * en_relid is set only for DMLs, hence a select for update on a
+			 * replicated table here is an assertion
+			 */
+			Assert(!(exec_nodes->accesstype == RELATION_ACCESS_READ_FOR_UPDATE &&
+						IsRelationReplicated(rel_loc_info)));
 
 			/* Use the obtained list for given table */
 			if (nodes)
@@ -2741,8 +2774,12 @@ pgxc_start_command_on_connection(PGXCNodeHandle *connection,
 		 * The select from child should not see the just inserted rows.
 		 * The command id of the select from child is therefore set to
 		 * the command id of the insert-select query saved earlier.
+		 * Similarly a WITH query that updates a table in main query
+		 * and inserts a row in the same table in the WITH query
+		 * needs to make sure that the row inserted by the WITH query does
+		 * not get updated by the main query.
 		 */
-		if (step->exec_nodes->accesstype == RELATION_ACCESS_READ && step->has_ins_child_sel_parent)
+		if (step->exec_nodes->accesstype == RELATION_ACCESS_READ && step->rq_save_command_id)
 			cid = remotestate->rqs_cmd_id;
 		else
 			cid = GetCurrentCommandId(false);
@@ -3160,9 +3197,22 @@ RemoteQueryNext(ScanState *scan_node)
 {
 	RemoteQueryState *node = (RemoteQueryState *)scan_node;
 	TupleTableSlot *scanslot = scan_node->ss_ScanTupleSlot;
+	RemoteQuery *rq = (RemoteQuery*) node->ss.ps.plan;
+	EState *estate = node->ss.ps.state;
+
+	/*
+	 * Initialize tuples processed to 0, to make sure we don't re-use the
+	 * values from the earlier iteration of RemoteQueryNext(). For an FQS'ed
+	 * DML returning query, it may not get updated for subsequent calls.
+	 * because there won't be a HandleCommandComplete() call to update this
+	 * field.
+	 */
+	node->rqs_processed = 0;
 
 	if (!node->query_Done)
 	{
+		/* Fire BEFORE STATEMENT triggers just before the query execution */
+		pgxc_rq_fire_bstriggers(node);
 		do_query(node);
 		node->query_Done = true;
 	}
@@ -3269,6 +3319,28 @@ RemoteQueryNext(ScanState *scan_node)
 
 	/* report error if any */
 	pgxc_node_report_error(node);
+
+	/*
+	 * Now we know the query is successful. Fire AFTER STATEMENT triggers. Make
+	 * sure this is the last iteration of the query. If an FQS query has
+	 * RETURNING clause, this function can be called multiple times until we
+	 * return NULL.
+	 */
+	if (TupIsNull(scanslot))
+		pgxc_rq_fire_astriggers(node);
+
+	/*
+	 * If it's an FQSed DML query for which command tag is to be set,
+	 * then update estate->es_processed. For other queries, the standard
+	 * executer takes care of it; namely, in ExecModifyTable for DML queries
+	 * and ExecutePlan for SELECT queries.
+	 */
+	if (rq->remote_query->canSetTag &&
+		!rq->rq_params_internal &&
+		(rq->remote_query->commandType == CMD_INSERT ||
+		 rq->remote_query->commandType == CMD_UPDATE ||
+		 rq->remote_query->commandType == CMD_DELETE))
+		estate->es_processed += node->rqs_processed;
 
 	return scanslot;
 }
@@ -4133,32 +4205,9 @@ ExecProcNodeDMLInXC(EState *estate,
 	 * determination of the target nodes.
 	 */
 
-	 /*
-	  * TODO : What if the distribution column has changed by trigger ? We should
-	  * check that the corresponding data node has not changed.
-	  */
 	if (econtext)
 		econtext->ecxt_scantuple = newDataSlot;
 
-	/*
-	 * Consider the case of a non FQSed INSERT for example. The executor keeps
-	 * track of # of tuples processed in es_processed member of EState structure.
-	 * When a non-FQSed INSERT completes this member is increased once due to
-	 * estate->es_processed += rowcount
-	 * in HandleCommandComplete and once due to
-	 * (estate->es_processed)++
-	 * in ExecInsert. The result is that although only one row is inserted we
-	 * get message as if two rows got inserted INSERT 0 2. Now consider the
-	 * same INSERT case when it is FQSed. In this case the # of tuples processed
-	 * is increased just once in HandleCommandComplete since ExecInsert is never
-	 * called in this case and hence we get correct output i.e. INSERT 0 1
-	 * To handle this error in processed tuple counting we use a variable
-	 * non_fqs_dml which indicates whether this DML is FQSed or not. To indicate
-	 * that this DML is not FQSed non_fqs_dml is set to true here and then if
-	 * it is found true in HandleCommandComplete we skip handling of
-	 * es_processed there and let ExecInsert do the processed tuple counting.
-	 */
-	resultRemoteRel->non_fqs_dml = true;
 
 	/*
 	 * This loop would be required to reject tuples received from datanodes
@@ -5073,3 +5122,79 @@ pgxc_append_param_val(StringInfo buf, Datum val, Oid valtype)
 	appendBinaryStringInfo(buf, pstring, len);
 }
 
+/*
+ * pgxc_rq_fire_bstriggers:
+ * BEFORE STATEMENT triggers to be fired for a user-supplied DML query.
+ * For non-FQS query, we internally generate remote DML query to be executed
+ * for each row to be processed. But we do not want to explicitly fire triggers
+ * for such a query; ExecModifyTable does that for us. It is the FQS DML query
+ * where we need to explicitly fire statement triggers on coordinator. We
+ * cannot run stmt triggers on datanode. While we can fire stmt trigger on
+ * datanode versus coordinator based on the function shippability, we cannot
+ * do the same for FQS query. The datanode has no knowledge that the trigger
+ * being fired is due to a non-FQS query or an FQS query. Even though it can
+ * find that all the triggers are shippable, it won't know whether the stmt
+ * itself has been FQSed. Even though all triggers were shippable, the stmt
+ * might have been planned on coordinator due to some other non-shippable
+ * clauses. So the idea here is to *always* fire stmt triggers on coordinator.
+ * Note that this does not prevent the query itself from being FQSed. This is
+ * because we separately fire stmt triggers on coordinator.
+ */
+static void
+pgxc_rq_fire_bstriggers(RemoteQueryState *node)
+{
+	RemoteQuery *rq = (RemoteQuery*) node->ss.ps.plan;
+	EState *estate = node->ss.ps.state;
+
+	/* If it's not an internally generated query, fire BS triggers */
+	if (!rq->rq_params_internal && estate->es_result_relations)
+	{
+		Assert(rq->remote_query);
+		switch (rq->remote_query->commandType)
+		{
+			case CMD_INSERT:
+				ExecBSInsertTriggers(estate, estate->es_result_relations);
+				break;
+			case CMD_UPDATE:
+				ExecBSUpdateTriggers(estate, estate->es_result_relations);
+				break;
+			case CMD_DELETE:
+				ExecBSDeleteTriggers(estate, estate->es_result_relations);
+				break;
+			default:
+				break;
+		}
+	}
+}
+
+/*
+ * pgxc_rq_fire_astriggers:
+ * AFTER STATEMENT triggers to be fired for a user-supplied DML query.
+ * See comments in pgxc_rq_fire_astriggers()
+ */
+static void
+pgxc_rq_fire_astriggers(RemoteQueryState *node)
+{
+	RemoteQuery *rq = (RemoteQuery*) node->ss.ps.plan;
+	EState *estate = node->ss.ps.state;
+
+	/* If it's not an internally generated query, fire AS triggers */
+	if (!rq->rq_params_internal && estate->es_result_relations)
+	{
+		Assert(rq->remote_query);
+		switch (rq->remote_query->commandType)
+		{
+			case CMD_INSERT:
+				ExecASInsertTriggers(estate, estate->es_result_relations);
+				break;
+			case CMD_UPDATE:
+				ExecASUpdateTriggers(estate, estate->es_result_relations);
+				break;
+			case CMD_DELETE:
+				ExecASDeleteTriggers(estate, estate->es_result_relations);
+				break;
+			default:
+				break;
+		}
+	}
+}

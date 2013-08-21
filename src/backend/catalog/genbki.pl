@@ -7,7 +7,7 @@
 #    header files.  The .bki files are used to initialize the postgres
 #    template database.
 #
-# Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+# Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
 # Portions Copyright (c) 1994, Regents of the University of California
 #
 # src/backend/catalog/genbki.pl
@@ -233,7 +233,7 @@ foreach my $catname (@{ $catalogs->{names} })
 #PGXC_BEGIN
                     ,{xc_node_id  => 'int4'}
 #PGXC_END
-				);
+                );
 				foreach my $attr (@SYS_ATTRS)
 				{
 					$attnum--;
@@ -279,7 +279,7 @@ print SCHEMAPG <<EOM;
  * schemapg.h
  *    Schema_pg_xxx macros for use by relcache.c
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * NOTES

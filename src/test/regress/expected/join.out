@@ -2763,7 +2763,7 @@ select * from tenk1 t1 left join
   (tenk1 t2 join tenk1 t3 on t2.thousand = t3.unique2)
   on t1.hundred = t2.hundred and t1.ten = t3.ten
 where t1.unique1 = 1;
-                            QUERY PLAN
+                            QUERY PLAN                            
 ------------------------------------------------------------------
  Hash Right Join
    Hash Cond: ((t2.hundred = t1.hundred) AND (t3.ten = t1.ten))
@@ -2781,7 +2781,7 @@ select * from tenk1 t1 left join
   (tenk1 t2 join tenk1 t3 on t2.thousand = t3.unique2)
   on t1.hundred = t2.hundred and t1.ten + t2.ten = t3.ten
 where t1.unique1 = 1;
-                            QUERY PLAN
+                            QUERY PLAN                            
 ------------------------------------------------------------------
  Hash Right Join
    Hash Cond: (t2.hundred = t1.hundred)
@@ -2800,7 +2800,7 @@ select count(*) from
   tenk1 a join tenk1 b on a.unique1 = b.unique2
   left join tenk1 c on a.unique2 = b.unique1 and c.thousand = a.thousand
   join int4_tbl on b.thousand = f1;
-                                  QUERY PLAN
+                                  QUERY PLAN                                  
 ------------------------------------------------------------------------------
  Aggregate
    ->  Hash Join
@@ -2835,7 +2835,7 @@ select b.unique1 from
   join int4_tbl i1 on b.thousand = f1
   right join int4_tbl i2 on i2.f1 = b.tenthous
   order by 1;
-                                     QUERY PLAN
+                                     QUERY PLAN                                     
 ------------------------------------------------------------------------------------
  Sort
    Sort Key: b.unique1
@@ -2877,18 +2877,19 @@ select b.unique1 from
 --
 -- test handling of potential equivalence clauses above outer joins
 --
-explain (costs off)
+explain (num_nodes off, nodes off, costs off)
 select q1, unique2, thousand, hundred
   from int8_tbl a left join tenk1 b on q1 = unique2
   where coalesce(thousand,123) = q1 and q1 = coalesce(hundred,123);
                                       QUERY PLAN                                      
 --------------------------------------------------------------------------------------
- Nested Loop Left Join
+ Hash Left Join
+   Hash Cond: (a.q1 = b.unique2)
    Filter: ((COALESCE(b.thousand, 123) = a.q1) AND (a.q1 = COALESCE(b.hundred, 123)))
-   ->  Seq Scan on int8_tbl a
-   ->  Index Scan using tenk1_unique2 on tenk1 b
-         Index Cond: (a.q1 = unique2)
-(5 rows)
+   ->  Data Node Scan on int8_tbl "_REMOTE_TABLE_QUERY_"
+   ->  Hash
+         ->  Data Node Scan on tenk1 "_REMOTE_TABLE_QUERY_"
+(6 rows)
 
 select q1, unique2, thousand, hundred
   from int8_tbl a left join tenk1 b on q1 = unique2
@@ -2897,18 +2898,19 @@ select q1, unique2, thousand, hundred
 ----+---------+----------+---------
 (0 rows)
 
-explain (costs off)
+explain (num_nodes off, nodes off, costs off)
 select f1, unique2, case when unique2 is null then f1 else 0 end
   from int4_tbl a left join tenk1 b on f1 = unique2
   where (case when unique2 is null then f1 else 0 end) = 0;
                              QUERY PLAN                             
 --------------------------------------------------------------------
- Nested Loop Left Join
+ Hash Left Join
+   Hash Cond: (a.f1 = b.unique2)
    Filter: (CASE WHEN (b.unique2 IS NULL) THEN a.f1 ELSE 0 END = 0)
-   ->  Seq Scan on int4_tbl a
-   ->  Index Only Scan using tenk1_unique2 on tenk1 b
-         Index Cond: (unique2 = a.f1)
-(5 rows)
+   ->  Data Node Scan on int4_tbl "_REMOTE_TABLE_QUERY_"
+   ->  Hash
+         ->  Data Node Scan on tenk1 "_REMOTE_TABLE_QUERY_"
+(6 rows)
 
 select f1, unique2, case when unique2 is null then f1 else 0 end
   from int4_tbl a left join tenk1 b on f1 = unique2
@@ -2921,29 +2923,26 @@ select f1, unique2, case when unique2 is null then f1 else 0 end
 --
 -- test ability to push constants through outer join clauses
 --
-explain (costs off)
+explain (num_nodes off, nodes off, costs off)
   select * from int4_tbl a left join tenk1 b on f1 = unique2 where f1 = 0;
-                   QUERY PLAN                    
--------------------------------------------------
+                       QUERY PLAN                        
+---------------------------------------------------------
  Nested Loop Left Join
    Join Filter: (a.f1 = b.unique2)
-   ->  Seq Scan on int4_tbl a
-         Filter: (f1 = 0)
-   ->  Index Scan using tenk1_unique2 on tenk1 b
-         Index Cond: (unique2 = 0)
-(6 rows)
+   ->  Data Node Scan on int4_tbl "_REMOTE_TABLE_QUERY_"
+   ->  Data Node Scan on tenk1 "_REMOTE_TABLE_QUERY_"
+(4 rows)
 
-explain (costs off)
+explain (num_nodes off, nodes off, costs off)
   select * from tenk1 a full join tenk1 b using(unique2) where unique2 = 42;
-                   QUERY PLAN                    
--------------------------------------------------
- Merge Full Join
-   Merge Cond: (a.unique2 = b.unique2)
-   ->  Index Scan using tenk1_unique2 on tenk1 a
-         Index Cond: (unique2 = 42)
-   ->  Index Scan using tenk1_unique2 on tenk1 b
-         Index Cond: (unique2 = 42)
-(6 rows)
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Hash Full Join
+   Hash Cond: (a.unique2 = b.unique2)
+   ->  Data Node Scan on tenk1 "_REMOTE_TABLE_QUERY_"
+   ->  Hash
+         ->  Data Node Scan on tenk1 "_REMOTE_TABLE_QUERY_"
+(5 rows)
 
 --
 -- test join removal
@@ -3048,15 +3047,23 @@ explain (verbose true, costs false, nodes false)
   select p.*, linked from parent p
     left join (select c.*, true as linked from child c) as ss
     on (p.k = ss.k) order by p.k;
-                                                                                                     QUERY PLAN                                                                                                      
----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
  Sort
    Output: p.k, p.pd, (true)
    Sort Key: p.k
-   ->  Data Node Scan on "__REMOTE_SORT_QUERY__"
-         Output: p.k, p.pd, true
-         Remote query: SELECT l.a_1, l.a_2 FROM ((SELECT p.k, p.pd FROM ONLY parent p WHERE true) l(a_1, a_2) LEFT JOIN (SELECT c.k FROM ONLY child c WHERE true) r(a_1) ON ((l.a_1 = r.a_1))) WHERE true ORDER BY 1
-(6 rows)
+   ->  Hash Left Join
+         Output: p.k, p.pd, (true)
+         Hash Cond: (p.k = c.k)
+         ->  Data Node Scan on parent "_REMOTE_TABLE_QUERY_"
+               Output: p.k, p.pd
+               Remote query: SELECT k, pd FROM ONLY parent p WHERE true
+         ->  Hash
+               Output: c.k, (true)
+               ->  Data Node Scan on child "_REMOTE_TABLE_QUERY_"
+                     Output: c.k, true
+                     Remote query: SELECT k FROM ONLY child c WHERE true
+(14 rows)
 
 -- check for a 9.0rc1 bug: join removal breaks pseudoconstant qual handling
 select p.* from

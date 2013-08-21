@@ -400,7 +400,7 @@ WITH RECURSIVE x(n) AS (SELECT n FROM x)
 WITH RECURSIVE x(n) AS (SELECT n FROM x UNION ALL SELECT 1)
 	SELECT * FROM x;
 
-CREATE TEMPORARY TABLE y (a INTEGER);
+CREATE TEMPORARY TABLE y (a INTEGER) DISTRIBUTE BY REPLICATION;
 INSERT INTO y SELECT generate_series(1, 10);
 
 -- LEFT JOIN
@@ -589,7 +589,7 @@ with
 A as ( select q2 as id, (select q1) as x from int8_tbl ),
 B as ( select id, row_number() over (partition by id) as r from A ),
 C as ( select A.id, array(select B.id from B where B.id = A.id) from A )
-select * from C;
+select * from C order by id;
 
 --
 -- Test CTEs read in non-initialization orders
@@ -872,8 +872,8 @@ DROP FUNCTION y_trigger();
 -- WITH attached to inherited UPDATE or DELETE
 
 CREATE TEMP TABLE parent ( id int, val text ) DISTRIBUTE BY REPLICATION;
-CREATE TEMP TABLE child1 ( ) INHERITS ( parent );
-CREATE TEMP TABLE child2 ( ) INHERITS ( parent );
+CREATE TEMP TABLE child1 ( ) INHERITS ( parent ) DISTRIBUTE BY REPLICATION;
+CREATE TEMP TABLE child2 ( ) INHERITS ( parent ) DISTRIBUTE BY REPLICATION;
 
 INSERT INTO parent VALUES ( 1, 'p1' );
 INSERT INTO child1 VALUES ( 11, 'c11' ),( 12, 'c12' );
