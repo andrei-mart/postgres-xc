@@ -6,7 +6,7 @@
 
   <note>
    <title>Release Date</title>
-   <simpara>2013-07-04</simpara>
+   <simpara>2013-08-22</simpara>
   </note>
 
   <para>
@@ -26,7 +26,7 @@
    <title>Overview</title>
 
    <para>
-    Postgres-XC 1.0 is a symetric (multi-master, read and write-scalable) shared-nothing cluster 
+    Postgres-XC is a symmetric (multi-master, read and write-scalable) shared-nothing cluster 
     based on <productname>PostgreSQL</productname>. 
     This release version is based on <productname>PostgreSQL</productname> 9.2.
    </para>
@@ -256,7 +256,7 @@
     <listitem>
      <para>
       Backup gtm restart point when <command>CREATE BARRIER</command> is issued. 
-      Still tested at beta, by Koichi Suzuki.
+      By Koichi Suzuki.  Reviewd by Pavan Deolasee and Nikhin Sontakke.
      </para>
     </listitem>
 
@@ -409,13 +409,13 @@
 
     <listitem>
      <para>
-      Release GTM thread lock before exit, by Andrei Martinchyk.
+      Release GTM thread lock before exit, by Andrei Martsinchyk.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      Block GXID generation on standbys, by Andrei Martinchyk.
+      Block GXID generation on standbys, by Andrei Martsinchyk.
      </para>
     </listitem>
 
@@ -594,7 +594,40 @@
 
     <listitem>
      <para>
-      Fix sequence backup to <application>gtm</application> slave, by Andrei Martinchyk.
+      Fix sequence backup to <application>gtm</application> slave, by Andrei Martsinchyk.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix incorrect disconnect handling in GTM Proxy, by Andrei Martsinchyk.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix message level related to <literal>BARRIER</literal>, by Koichi Suzuki.
+      Reviewd by Michael Paquier and Nikhil Sontakke.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix potential memory leak at coordinator part of GTM, by Andrei Martsinchyk.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix calculation of gxid range in MSG_TXN_BEGIN_GETGXID_MULTI message handling in GTM,
+      by Nikhil Sontakke.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix 1024 limitation of sequence defined in GTM.
+      By Andrei Martsinchyk.
      </para>
     </listitem>
 
@@ -609,14 +642,21 @@
 
     <listitem>
      <para>
-      Using complicated statement in <command>PREPARE</command> steatement may not 
-      be supported (depends upon specific statement). 
+      <literal>SERIALIZABLE</literal> and <literal>REPEATABLE READ</literal> transaction isolation modes are not supported.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      GTM restart point backup for <command>BARRIER</command> may not work with GTM_Proxy.
+      Only constraints which can be enforced only locally to a datanode are supported.
+      For example, UNIQUE constraints for non-distribute column is not supported in distributed tables.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Using complicated statement in <command>PREPARE</command> steatement may not 
+      be supported (depends upon specific statement). 
      </para>
     </listitem>
 
