@@ -295,6 +295,7 @@ IsTypeDistributable(Oid col_type)
 	|| col_type == INTERVALOID
 	|| col_type == TIMETZOID
 	|| col_type == NUMERICOID
+	|| col_type == UUIDOID
 	)
 		return true;
 
