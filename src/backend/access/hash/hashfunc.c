@@ -628,6 +628,8 @@ compute_hash(Oid type, Datum value, char locator)
 
 		case NUMERICOID:
 			return DirectFunctionCall1(hash_numeric, value);
+		case UUIDOID:
+			return DirectFunctionCall1(uuid_hash, value);
 		default:
 			ereport(ERROR,(errmsg("Unhandled datatype for modulo or hash distribution\n")));
 	}
@@ -707,6 +709,8 @@ get_compute_hash_function(Oid type, char locator)
 			return "timetz_hash";
 		case NUMERICOID:
 			return "hash_numeric";
+		case UUIDOID:
+			return "uuid_hash";
 		default:
 			ereport(ERROR,(errmsg("Unhandled datatype for modulo or hash distribution\n")));
 	}
