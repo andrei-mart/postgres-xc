@@ -1132,11 +1132,6 @@ pgxc_node_send_parse(PGXCNodeHandle * handle, const char* statement,
 	/* message length */
 	int			msgLen;
 	int			cnt_params;
-#if 0
-	size_t		old_outEnd = handle->outEnd;
-#else
-#define old_outEnd handle->outEnd
-#endif	
 
 	/* if there are parameters, param_types should exist */
 	Assert(num_params <= 0 || param_types);
@@ -1200,7 +1195,6 @@ pgxc_node_send_parse(PGXCNodeHandle * handle, const char* statement,
 		pfree(paramTypes[cnt_params]);
 	}
 	pfree(paramTypes);
-	Assert(old_outEnd + ntohl(msgLen) + 1 == handle->outEnd);
 
  	return 0;
 }
