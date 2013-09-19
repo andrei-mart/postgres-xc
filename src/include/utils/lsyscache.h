@@ -141,6 +141,7 @@ extern bool type_is_collatable(Oid typid);
 extern Oid	getBaseType(Oid typid);
 extern Oid	getBaseTypeAndTypmod(Oid typid, int32 *typmod);
 #ifdef PGXC
+extern Oid  get_typenamespace(Oid typid);
 extern char *get_typename(Oid typid);
 extern char *get_pgxc_nodename(Oid nodeoid);
 extern Oid	get_pgxc_nodeoid(const char *nodename);

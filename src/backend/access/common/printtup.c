@@ -21,6 +21,7 @@
 #include "tcop/pquery.h"
 #include "utils/lsyscache.h"
 #ifdef PGXC
+#include "catalog/pg_namespace.h"
 #include "pgxc/pgxc.h"
 #endif
 
@@ -199,9 +200,18 @@ SendRowDescriptionMessage(TupleDesc typeinfo, List *targetlist, int16 *formats)
 		 */
 		if (IsConnFromCoord())
 		{
+			char	   *typenamespace = NULL;
 			char	   *typename;
+			Oid			nspid;
+
+			nspid = get_typenamespace(atttypid);
+			if (OidIsValid(nspid) && nspid != PG_CATALOG_NAMESPACE)
+			{
+				typenamespace = get_namespace_name(nspid);
+			}
 			typename = get_typename(atttypid);
-			pq_sendstring(&buf, typename);
+			pq_sendstring(&buf, quote_qualified_identifier(typenamespace,
+										typename));
 		}
 #endif
 

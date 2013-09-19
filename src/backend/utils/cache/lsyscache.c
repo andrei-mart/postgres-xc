@@ -2189,6 +2189,29 @@ getBaseTypeAndTypmod(Oid typid, int32 *typmod)
 
 #ifdef PGXC
 /*
+ * get_typenamespace
+ *		Get namespace for given type ID
+ */
+Oid
+get_typenamespace(Oid typid)
+{
+	HeapTuple		tuple;
+	Form_pg_type	typeForm;
+	Oid				result;
+
+	tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+
+	if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for type %u", typid);
+
+	typeForm = (Form_pg_type) GETSTRUCT(tuple);
+	result = typeForm->typnamespace;
+	ReleaseSysCache(tuple);
+
+	return result;
+}
+
+/*
  * get_typename
  *		Get type name for given type ID
  */
